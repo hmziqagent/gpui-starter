@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "release_notes": "**Full Changelog**: https://github.com/hmziqagent/gpui-starter/commits/v0.2.0",
+  "platforms": {
+    "macos-aarch64": {
+      "url": "https://github.com/hmziqagent/gpui-starter/releases/download/v0.2.0/GPUI-Starter-0.2.0.dmg",
+      "signature": "",
+      "size": 14981993
+    }
+  }
+}
