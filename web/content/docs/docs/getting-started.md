@@ -27,7 +27,7 @@ The codebase is split into four layers: shell (UI chrome), features (pages), ser
 
 ```
 gpui-app/
-├── Cargo.toml              # Workspace: app + gpui-query crates
+├── Cargo.toml              # Workspace root: the app crate (gpui-query is an external dependency)
 ├── build.rs                # es-fluent asset tracking
 ├── i18n.toml               # rust-i18n configuration
 ├── src/

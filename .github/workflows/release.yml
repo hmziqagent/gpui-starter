@@ -23,10 +23,11 @@ jobs:
     runs-on: macos-latest
     env:
       # Same discipline as ci.yml: CARGO_BUILD_JOBS=2 (the 14 GB runner swaps
-      # with more parallel rustc on the heavy gpui/gpui_component (gpui-kit)
-      # crates) and many codegen units to keep peak RSS down on a release
-      # build (optimization-heavy) so it doesn't OOM. No RUST_MIN_STACK: the
-      # glob-shadow stack overflow it papered over is fixed (see ci.yml).
+      # with more parallel rustc on the heavy gpui-pre / gpui-kit
+      # (gpui-component) crates) and many codegen units to keep peak RSS down
+      # on a release build (optimization-heavy) so it doesn't OOM. No
+      # RUST_MIN_STACK: the glob-shadow stack overflow it papered over is
+      # fixed (see ci.yml).
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"

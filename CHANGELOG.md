@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Migrated the GPUI foundation to **gpui-kit 0.6.0** from crates.io, built on `gpui-pre` (the published snapshot of Zed's gpui) — the whole graph resolves to exactly one gpui copy and the zed git `[patch]` entries are gone
+- `gpui-form` now comes from canonical upstream `stayhydated/gpui-form` master @`216af496` (git pin); `koruma` 0.11 and `es-fluent` 0.18.1 follow upstream's stayhydated pins
+- `gpui-query` resolves through a `[patch.crates-io]` override to our `gpui-pre-0.6` fork branch (a one-line manifest swap onto `gpui-pre`); no library sources are vendored
+- Ported the form page to the gpui-form 0.6 API: component paths via `gpui_form_collection`, `value_change` subscriptions, koruma bare-path validators; generated form members now use raw field names (`name` instead of `name_input`)
+- `i18n::localize` now takes a `&'static str` message id, and es-fluent 0.18 renames the variants-enum label message suffix `_this` to `_label`
+
 ## [0.3.0] - 2026-06-05
 
 ### Added

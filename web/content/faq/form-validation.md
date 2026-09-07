@@ -16,24 +16,24 @@ One struct with derive macros does the wiring. Each field gets a component type 
 #[fluent_variants(keys = ["description", "label"])]
 #[gpui_form(koruma(fluent))]
 pub struct RegistrationForm {
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub name: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(EmailValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(EmailValidation::<_>)]
     pub email: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub password: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(PhoneNumberValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(PhoneNumberValidation::<_>)]
     pub phone: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(UrlValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(UrlValidation::<_>)]
     pub website: String,
 }
 ```
@@ -65,7 +65,7 @@ Four derives on one struct, each with a specific job:
 | `PhoneNumberValidation` | North American phone format | `(555) 123-4567` |
 | `UrlValidation` | Valid URL with scheme | `https://example.com` |
 
-All validators use the builder pattern. You can chain configuration methods on the builder to customize strictness or error messages.
+In the `#[koruma(...)]` attribute, validators are written as bare paths; chain option setters directly on the path when a validator needs configuration.
 
 ## How validation and rendering connect
 
