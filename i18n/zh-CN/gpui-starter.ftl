@@ -4,7 +4,7 @@ registration_form_this = 注册表单
 
 ## RegistrationFormLabelVariants
 
-registration_form_label_variants_this = 注册表单标签
+registration_form_label_variants_label = 注册表单标签
 registration_form_label_variants-name = 全名
 registration_form_label_variants-email = 邮箱
 registration_form_label_variants-password = 密码
@@ -13,7 +13,7 @@ registration_form_label_variants-website = 网站
 
 ## RegistrationFormDescriptionVariants
 
-registration_form_description_variants_this = 注册表单描述
+registration_form_description_variants_label = 注册表单描述
 registration_form_description_variants-name = 请输入您的全名。
 registration_form_description_variants-email = 我们绝不会与任何人分享您的邮箱。
 registration_form_description_variants-password = 请选择一个强密码。

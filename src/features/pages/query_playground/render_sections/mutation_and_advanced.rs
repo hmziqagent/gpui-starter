@@ -157,8 +157,10 @@ impl QueryPlaygroundPage {
             .map(|(e, _)| {
                 let mut result = Vec::new();
                 e.read_with(cx, |r, _| {
+                    // gpui-query 0.2 stores pages as `Arc<T>`, so cloning the
+                    // item already yields the shared `Arc` we render from.
                     for (i, page) in r.pages().iter().enumerate() {
-                        result.push((i, Arc::new(page.clone())));
+                        result.push((i, page.clone()));
                     }
                 });
                 result
