@@ -2,6 +2,8 @@
 
 GPUI Starter is a desktop application boilerplate built with the [GPUI](https://github.com/zed-industries/zed) framework from Zed, targeting macOS (with Linux support). It ships working implementations of the cross-cutting concerns every desktop app needs — persisted settings, i18n, theming, background tasks, telemetry, notifications, diagnostics, and an in-app command palette — so you can start building your own features on day one.
 
+The UI component layer is the `gpui-component` crate from [GPUI Kit](https://github.com/longbridge/gpui-kit) — upstream renamed the repo from gpui-component to gpui-kit (crate names unchanged); we track kit main rev `2126ced` via the old, redirecting git URL so the dependency graph stays unified.
+
 ## Module Map
 
 Every module lives under `src/`. Modules that depend on other modules are noted with arrows.

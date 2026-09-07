@@ -6,8 +6,9 @@ on:
   pull_request:
     branches: [master]
 
-# CI env for the Zed gpui + gpui-component + gpui-form graph. These knobs are
-# peak-RSS / target/-hygiene for the 14 GB runner (not correctness needs):
+# CI env for the Zed gpui + gpui-kit (crate gpui-component) + gpui-form graph.
+# These knobs are peak-RSS / target/-hygiene for the 14 GB runner (not
+# correctness needs):
 #   - CARGO_BUILD_JOBS=2, *_CODEGEN_UNITS=256, *_DEBUG=none, CARGO_INCREMENTAL=0.
 # NOTE: the previous RUST_MIN_STACK=512 MiB + recursion_limit=8192 were a band-aid
 # over a `#[test]` → `gpui::test` glob-shadow that recursed infinitely and
@@ -50,7 +51,7 @@ jobs:
 
   # ---------------------------------------------------------------------
   # NOTE: there is no WORKSPACE-WIDE `cargo test` job here. A full `cargo test`
-  # does codegen of the entire Zed gpui + gpui-component + gpui-form graph
+  # does codegen of the entire Zed gpui + gpui-kit + gpui-form graph
   # (~13 GB of target/), which on the macOS runner is a multi-HOUR build that
   # exceeds GitHub's 6 h job limit. There is no fast subset either: every
   # crate's tests — even gpui-query's no-gpui `core` feature — import gpui's

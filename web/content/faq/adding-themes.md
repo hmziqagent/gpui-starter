@@ -51,7 +51,7 @@ A complete theme file looks like this. The `"colors"` block controls component c
 {
   "name": "My Theme Family",
   "author": "Your Name",
-  "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
+  "$schema": "https://github.com/longbridge/gpui-kit/raw/refs/heads/main/.theme-schema.json",
   "themes": [
     {
       "name": "My Theme Dark",
