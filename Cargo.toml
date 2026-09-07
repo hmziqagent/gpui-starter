@@ -12,13 +12,17 @@ members = [
 # gpui-component@main do (unpinned, frozen by the lockfile) — pinning a rev
 # HERE while they float would fork the graph into two gpui copies and a wall
 # of cross-copy trait mismatches.
-gpui-form = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-core = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-schema = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-component = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-component-derive = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-codegen = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
-gpui-form-derive = { git = "https://github.com/freeoxide/gpui-form", rev = "7f971b3971560a7d59734a235dc69d69d9e66044" }
+# Sync source: freeoxide/gpui-form PR #5 (merged 2026-09-07, rev 2604a5e)
+# pins gpui-component @ 2126ced — the last zed-git commit of gpui-kit main.
+# Keep these seven revs and our gpui-component rev in lockstep with that
+# fork's master; bumping either alone would fork the gpui-component graph.
+gpui-form = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-core = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-schema = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-component = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-component-derive = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-codegen = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
+gpui-form-derive = { git = "https://github.com/freeoxide/gpui-form", rev = "2604a5e5ac4b343db0a5629d1b598f3d1a3d39df" }
 
 # GPUI ecosystem
 gpui = { git = "https://github.com/zed-industries/zed", version = "=0.2.2" }
@@ -28,8 +32,14 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", version = "=0.1
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "5a5e2abc837b6d927e2b38e2097d2fbf39ebee77" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "5a5e2abc837b6d927e2b38e2097d2fbf39ebee77" }
+# longbridge/gpui-component was RENAMED to gpui-kit; the old URL git-redirects
+# and is what gpui-form's manifest references — keep the URL string EXACTLY as
+# is or the gpui-component source forks into two checkouts. rev 2126ced is the
+# last zed-git commit of kit main (2026-08-31); kit 0.6.0+ moved to crates.io
+# gpui-pre and is blocked on gpui-form/gpui-query — see
+# .z-workflow/evidence/gpui-kit-audit.md before bumping past it.
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2126cedcb2664ab1f1c0625fbc667a007698521f" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "2126cedcb2664ab1f1c0625fbc667a007698521f" }
 
 # Serialization & data
 anyhow = "1"

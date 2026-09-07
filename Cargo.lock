@@ -3060,7 +3060,6 @@ dependencies = [
  "gpui_macros",
  "gpui_shared_string",
  "gpui_util",
- "hdrhistogram",
  "heapless 0.9.3",
  "http_client",
  "image",
@@ -3110,17 +3109,21 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?rev=5a5e2abc837b6d927e2b38e2097d2fbf39ebee77#5a5e2abc837b6d927e2b38e2097d2fbf39ebee77"
+source = "git+https://github.com/longbridge/gpui-component?rev=2126cedcb2664ab1f1c0625fbc667a007698521f#2126cedcb2664ab1f1c0625fbc667a007698521f"
 dependencies = [
  "aho-corasick",
  "anyhow",
  "async-channel",
  "chrono",
+ "futures",
  "gpui",
  "gpui_macros",
  "gpui_platform",
+ "html5ever",
  "instant",
  "lsp-types",
+ "markdown",
+ "markup5ever_rcdom",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -3142,25 +3145,22 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?rev=5a5e2abc837b6d927e2b38e2097d2fbf39ebee77#5a5e2abc837b6d927e2b38e2097d2fbf39ebee77"
+source = "git+https://github.com/longbridge/gpui-component?rev=2126cedcb2664ab1f1c0625fbc667a007698521f#2126cedcb2664ab1f1c0625fbc667a007698521f"
 dependencies = [
  "anyhow",
  "chrono",
  "core-text",
  "enum-iterator",
- "futures",
  "gpui",
  "gpui-base",
  "gpui-component-assets",
  "gpui-component-macros",
  "gpui_macros",
- "html5ever",
  "instant",
  "itertools 0.13.0",
  "log",
  "lsp-types",
  "markdown",
- "markup5ever_rcdom",
  "notify 7.0.0",
  "num-traits",
  "objc2 0.6.4",
@@ -3187,7 +3187,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/longbridge/gpui-component?rev=5a5e2abc837b6d927e2b38e2097d2fbf39ebee77#5a5e2abc837b6d927e2b38e2097d2fbf39ebee77"
+source = "git+https://github.com/longbridge/gpui-component?rev=2126cedcb2664ab1f1c0625fbc667a007698521f#2126cedcb2664ab1f1c0625fbc667a007698521f"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3201,7 +3201,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/longbridge/gpui-component?rev=5a5e2abc837b6d927e2b38e2097d2fbf39ebee77#5a5e2abc837b6d927e2b38e2097d2fbf39ebee77"
+source = "git+https://github.com/longbridge/gpui-component?rev=2126cedcb2664ab1f1c0625fbc667a007698521f#2126cedcb2664ab1f1c0625fbc667a007698521f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3211,7 +3211,7 @@ dependencies = [
 [[package]]
 name = "gpui-form"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "bon",
  "gpui-form-component",
@@ -3223,7 +3223,7 @@ dependencies = [
 [[package]]
 name = "gpui-form-codegen"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "darling",
  "derive_more",
@@ -3237,7 +3237,7 @@ dependencies = [
 [[package]]
 name = "gpui-form-component"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "chrono",
  "es-fluent",
@@ -3256,7 +3256,7 @@ dependencies = [
 [[package]]
 name = "gpui-form-component-derive"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "darling",
  "proc-macro-crate",
@@ -3269,12 +3269,12 @@ dependencies = [
 [[package]]
 name = "gpui-form-core"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 
 [[package]]
 name = "gpui-form-derive"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "darling",
  "gpui-form-codegen",
@@ -3290,7 +3290,7 @@ dependencies = [
 [[package]]
 name = "gpui-form-schema"
 version = "0.5.2"
-source = "git+https://github.com/freeoxide/gpui-form?rev=7f971b3971560a7d59734a235dc69d69d9e66044#7f971b3971560a7d59734a235dc69d69d9e66044"
+source = "git+https://github.com/freeoxide/gpui-form?rev=2604a5e5ac4b343db0a5629d1b598f3d1a3d39df#2604a5e5ac4b343db0a5629d1b598f3d1a3d39df"
 dependencies = [
  "heck 0.5.0",
  "inventory",
@@ -3746,20 +3746,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
 dependencies = [
  "hashbrown 0.14.5",
-]
-
-[[package]]
-name = "hdrhistogram"
-version = "7.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
-dependencies = [
- "base64",
- "byteorder",
- "crossbeam-channel",
- "flate2",
- "nom 8.0.0",
- "num-traits",
 ]
 
 [[package]]
