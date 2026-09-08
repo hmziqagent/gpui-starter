@@ -1,6 +1,6 @@
 //! Combined asset source.
 //!
-//! Merges the bundled gpui-component icon assets (`gpui_component_assets::Assets`)
+//! Merges the bundled gpui-kit icon assets (`gpui_kit_assets::Assets`)
 //! with gpui-starter's own project assets (currently the shipped theme
 //! definitions under `themes/`). Project assets take precedence on lookup so
 //! an app-supplied file shadows a same-named component asset. This replaces
@@ -16,15 +16,15 @@ use gpui::{AssetSource, Result, SharedString};
 #[folder = "$CARGO_MANIFEST_DIR/themes"]
 struct ProjectAssets;
 
-/// A merged [`AssetSource`] combining gpui-component assets with project assets.
+/// A merged [`AssetSource`] combining gpui-kit assets with project assets.
 pub struct CombinedAssets {
-    component: gpui_component_assets::Assets,
+    component: gpui_kit_assets::Assets,
 }
 
 impl CombinedAssets {
     pub fn new() -> Self {
         Self {
-            component: gpui_component_assets::Assets,
+            component: gpui_kit_assets::Assets,
         }
     }
 }

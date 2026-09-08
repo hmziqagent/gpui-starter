@@ -18,24 +18,24 @@ A single struct with derive macros handles the setup:
 #[fluent_variants(keys = ["description", "label"])]
 #[gpui_form(koruma(fluent))]
 pub struct RegistrationForm {
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub name: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(EmailValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(EmailValidation::<_>)]
     pub email: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub password: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(PhoneNumberValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(PhoneNumberValidation::<_>)]
     pub phone: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(UrlValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(UrlValidation::<_>)]
     pub website: String,
 }
 ```
@@ -67,7 +67,7 @@ The validators come from `koruma-collection`, which ships two categories:
 | `PhoneNumberValidation` | North American phone format | `(555) 123-4567` |
 | `UrlValidation` | Valid URL with scheme | `https://example.com` |
 
-All validators use the builder pattern. You can chain configuration methods on the builder to customize behavior (error messages, strictness levels). The `#[koruma(...)]` attribute on each field is all the wiring you need.
+In the `#[koruma(...)]` attribute, validators are written as bare paths (`NonEmptyValidation::<_>`); chain option setters directly on the path (for example `.min(3)`) when a validator needs configuration. The `#[koruma(...)]` attribute on each field is all the wiring you need.
 
 ## Localized labels and error messages
 
@@ -93,29 +93,30 @@ Because `KorumaAllFluent` is derived alongside `EsFluentVariants`, validation er
 
 ## Wiring input state
 
-`GpuiForm` generates a `RegistrationFormFormFields` struct that holds an `Entity<InputState>` per field. You create these in the page constructor and subscribe to change events:
+`GpuiForm` generates a `RegistrationFormFormFields` struct that holds an `Entity<InputState>` per field. Under gpui-form 0.6 the generated member and factory names are the RAW field names (`name`, not `name_input`). You create these in the page constructor and subscribe to change events via the `value_change` shape helper, which normalizes component events into `ValueChange::Set`/`Clear`/`Unchanged`:
 
 ```rust
+use gpui_form::runtime::shape::{ValueChange, value_change};
+use gpui_form_collection::input::Input as FormInput;
+
 pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let current_data = RegistrationFormFormValueHolder::default();
 
-    // Create input entities via the generated factory methods
-    let name_input = cx.new(|cx| RegistrationFormFormComponents::name_input(window, cx));
-    let email_input = cx.new(|cx| RegistrationFormFormComponents::email_input(window, cx));
+    // Create input entities via the generated factory methods (raw field names)
+    let name = cx.new(|cx| RegistrationFormFormComponents::name(window, cx));
+    let email = cx.new(|cx| RegistrationFormFormComponents::email(window, cx));
     // ... one per field
 
-    // Subscribe to changes to keep current_data in sync
+    // Subscribe to changes to keep current_data in sync. The 0.6 value holder
+    // stores plain String fields, so a cleared input maps to the empty string.
     let _subscriptions = vec![
         cx.subscribe(
-            &name_input,
+            &name,
             |this: &mut FormPage, state: Entity<InputState>, event: &InputEvent, cx| {
-                if let InputEvent::Change = event {
-                    let text = state.read(cx).value();
-                    this.current_data.name = if text.is_empty() {
-                        None
-                    } else {
-                        Some(text.to_string())
-                    };
+                match value_change::<FormInput, String>(state.read(cx), event) {
+                    ValueChange::Set(value) => this.current_data.name = value,
+                    ValueChange::Clear => this.current_data.name = String::new(),
+                    ValueChange::Unchanged => return,
                 }
             },
         ),
@@ -125,8 +126,8 @@ pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     Self {
         current_data,
         fields: RegistrationFormFormFields {
-            name_input,
-            email_input,
+            name,
+            email,
             // ... rest
         },
         agree_terms: false,
@@ -168,7 +169,7 @@ v_form()
                         })
                 }
             })
-            .child(Input::new(&self.fields.name_input)),
+            .child(Input::new(&self.fields.name)),
     )
 ```
 
@@ -182,8 +183,8 @@ Validation produces a `ValidationErrors` struct with typed accessors for each fi
 let error_for = |field_name: &str| -> Option<String> {
     validation_errors.as_ref().and_then(|e| {
         let errs: Vec<String> = match field_name {
-            "name" => e.name().all().iter().map(crate::i18n::localize_message).collect(),
-            "email" => e.email().all().iter().map(crate::i18n::localize_message).collect(),
+            "name" => e.name().all().map(|m| crate::i18n::localize_message(&m)).collect(),
+            "email" => e.email().all().map(|m| crate::i18n::localize_message(&m)).collect(),
             // ... other fields
             _ => Vec::new(),
         };
@@ -192,7 +193,7 @@ let error_for = |field_name: &str| -> Option<String> {
 };
 ```
 
-Each call like `e.name()` returns the list of validation failures for that field. `localize_message` converts each failure to a Fluent string in the current locale. Multiple errors on the same field are joined with newlines.
+Each call like `e.name()` returns an iterator over that field's validation failures (owned Fluent messages under koruma 0.11). `localize_message` converts each failure to a string in the current locale. Multiple errors on the same field are joined with newlines.
 
 ## Handling submission
 
@@ -237,7 +238,7 @@ The reset button clears all input values, resets `touched` and `submitted`, and 
 ```rust
 fn on_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.current_data = RegistrationFormFormValueHolder::default();
-    self.fields.name_input.update(cx, |s, cx| s.set_value("", window, cx));
+    self.fields.name.update(cx, |s, cx| s.set_value("", window, cx));
     // ... clear other fields
     self.agree_terms = false;
     self.submitted = false;

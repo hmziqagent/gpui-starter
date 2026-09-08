@@ -77,14 +77,11 @@ pub fn render_markdown_with_id(
             .bg(code_block_bg)
             .rounded(code_block_radius),
         // `table` / `table_cell` were added to `TextViewStyle` in gpui-component
-        // rev e416af7 (v0.5.2); default both — no table-specific styling needed.
+        // rev e416af7 (v0.5.2), `table_head` (header-row refinement) by kit rev
+        // 2126ced; default all three — no table-specific styling needed.
         table: StyleRefinement::default(),
-        table_cell: StyleRefinement::default(),
-        // `table_head` was added to `TextViewStyle` at gpui-component 2126ced
-        // (text stack moved to gpui-base behind a compat facade); default it —
-        // its colors are themed via TextViewDefaults (table_head /
-        // table_head_foreground tokens).
         table_head: StyleRefinement::default(),
+        table_cell: StyleRefinement::default(),
         // `inline_code` was added to `TextViewStyle` at gpui-component 5a5e2ab;
         // default it — its background falls back to the theme accent.
         inline_code: HighlightStyle::default(),

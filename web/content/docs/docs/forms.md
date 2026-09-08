@@ -11,7 +11,7 @@ gpui-starter includes a working registration form that demonstrates:
 - **koruma**: validation rules with composable builders
 - **es-fluent**: localized error messages
 
-The form is in `src/views/form_page.rs`.
+The form is in `src/features/pages/form_page.rs`.
 
 ## Defining a form model
 
@@ -22,24 +22,24 @@ The `RegistrationForm` struct derives multiple macros:
 #[fluent_variants(keys = ["description", "label"])]
 #[gpui_form(koruma(fluent))]
 pub struct RegistrationForm {
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub name: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(EmailValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(EmailValidation::<_>)]
     pub email: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub password: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(PhoneNumberValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(PhoneNumberValidation::<_>)]
     pub phone: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(UrlValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(UrlValidation::<_>)]
     pub website: String,
 }
 ```
@@ -55,7 +55,7 @@ The following validators from `koruma-collection` are used:
 | `PhoneNumberValidation` | Validates phone format | `(555) 123-4567` |
 | `UrlValidation` | Validates URL format | `https://example.com` |
 
-All validators use the builder pattern for configuration.
+In the `#[koruma(...)]` attribute, validators are written as bare paths (`NonEmptyValidation::<_>`); chain option setters directly on the path when a validator needs configuration.
 
 ## Fluent validation messages
 
@@ -85,7 +85,7 @@ v_form()
             .description_fn({
                 // closure that renders description + errors
             })
-            .child(Input::new(&self.fields.name_input)),
+            .child(Input::new(&self.fields.name)),
     )
 ```
 

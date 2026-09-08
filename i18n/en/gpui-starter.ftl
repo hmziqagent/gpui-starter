@@ -4,7 +4,7 @@ registration_form_this = Registration Form
 
 ## RegistrationFormLabelVariants
 
-registration_form_label_variants_this = Registration Form Labels
+registration_form_label_variants_label = Registration Form Labels
 registration_form_label_variants-name = Full Name
 registration_form_label_variants-email = Email
 registration_form_label_variants-password = Password
@@ -13,7 +13,7 @@ registration_form_label_variants-website = Website
 
 ## RegistrationFormDescriptionVariants
 
-registration_form_description_variants_this = Registration Form Descriptions
+registration_form_description_variants_label = Registration Form Descriptions
 registration_form_description_variants-name = Enter your full name.
 registration_form_description_variants-email = We'll never share your email with anyone else.
 registration_form_description_variants-password = Choose a strong password.

@@ -21,7 +21,7 @@ The `default` feature enables `client`. Add `hook` for the full ergonomic API.
 
 ```toml
 [dependencies]
-gpui-query-v2 = { path = "crates/gpui-query-v2", features = ["hook"] }
+gpui-query = { version = "0.2", features = ["hook"] }
 ```
 
 ## Quick start
@@ -30,7 +30,7 @@ Initialize `QueryClient` as a GPUI global during app setup.
 
 ```rust
 // main.rs or app initialization
-use gpui_query_v2::QueryClient;
+use gpui_query::QueryClient;
 
 cx.set_global(QueryClient::new());
 ```
@@ -38,8 +38,8 @@ cx.set_global(QueryClient::new());
 Then call `use_query` in your component's constructor. The hook returns a tuple of `(Entity<QueryResource<T, E>>, Subscription)`.
 
 ```rust
-use gpui_query_v2::{use_query, QueryOptions, QueryResource, CachePolicy};
-use gpui_query_v2::hook::QueryOptions;
+use gpui_query::{use_query, QueryOptions, QueryResource, CachePolicy};
+use gpui_query::hook::QueryOptions;
 
 struct UserList {
     users: gpui::Entity<QueryResource<Vec<User>, MyError>>,
@@ -88,7 +88,7 @@ The `Subscription` keeps the observer alive. Store it as a field. Dropping it un
 Write operations (create, update, delete) use `use_mutation`. Call `mutate` from event handlers.
 
 ```rust
-use gpui_query_v2::hook::{use_mutation, mutate};
+use gpui_query::hook::{use_mutation, mutate};
 
 struct MyView {
     create_user: gpui::Entity<MutationResource<NewUser, User, MyError>>,
@@ -116,7 +116,7 @@ Mutations support lifecycle callbacks via `mutate_with_callbacks`. The `on_succe
 For scrollable lists that load in pages, `use_infinite_query` manages a `VecDeque` of page data with bounded memory.
 
 ```rust
-use gpui_query_v2::hook::{
+use gpui_query::hook::{
     use_infinite_query, fetch_next_page_infinite,
     InfiniteQueryOptions,
 };
@@ -149,7 +149,7 @@ Default is `Ttl { ttl_ms: 60_000 }` (one minute).
 `RetryPolicy` configures automatic retries on fetch failure.
 
 ```rust
-use gpui_query_v2::RetryPolicy;
+use gpui_query::RetryPolicy;
 
 let policy = RetryPolicy::new(3)          // max 3 retries
     .with_delay(500)                      // 500ms base delay
@@ -171,7 +171,7 @@ Default is 3 retries with exponential backoff, 1-second base, 30-second cap. Mut
 `QueryKey` is a hierarchical array of strings, like TanStack Query's `["users", "42"]`.
 
 ```rust
-use gpui_query_v2::QueryKey;
+use gpui_query::QueryKey;
 
 let key = QueryKey::from(["users", "42", "posts"]);
 assert!(key.starts_with(&QueryKey::from(["users"])));
@@ -184,7 +184,7 @@ Internally uses `Arc<[Arc<str>]>` so cloning is cheap regardless of key length. 
 `QueryClient` provides bulk operations matching TanStack Query's client API.
 
 ```rust
-use gpui_query_v2::{QueryClient, QueryKeyFilter};
+use gpui_query::{QueryClient, QueryKeyFilter};
 
 // Invalidate all queries starting with "users"
 client.invalidate_queries(&QueryKeyFilter::prefix("users"), cx);
@@ -249,7 +249,7 @@ if let Some(prepared) = client.prepare_fetch_query::<UserData, MyError>(
 Implement `QueryPersister` to serialize cached data to disk.
 
 ```rust
-use gpui_query_v2::client::QueryPersister;
+use gpui_query::client::QueryPersister;
 
 struct FilePersister { path: PathBuf }
 

@@ -50,7 +50,7 @@ Each file in `themes/` defines one theme family. A family can contain multiple v
   "name": "My Theme Family",
   "author": "Your Name",
   "url": "https://github.com/you/my-theme",
-  "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
+  "$schema": "https://github.com/longbridge/gpui-kit/raw/refs/heads/main/.theme-schema.json",
   "themes": [
     {
       "name": "My Theme Dark",

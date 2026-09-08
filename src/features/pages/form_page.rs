@@ -10,6 +10,8 @@ use gpui_component::{
     v_flex,
 };
 use gpui_form::GpuiForm;
+use gpui_form::runtime::shape::{ValueChange, value_change};
+use gpui_form_collection::input::Input as FormInput;
 use koruma::{Koruma, KorumaAllFluent};
 use koruma_collection::{
     collection::NonEmptyValidation,
@@ -24,24 +26,24 @@ use koruma_collection::{
 #[fluent_variants(keys = ["description", "label"])]
 #[gpui_form(koruma(fluent))]
 pub struct RegistrationForm {
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub name: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(EmailValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(EmailValidation::<_>)]
     pub email: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(NonEmptyValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(NonEmptyValidation::<_>)]
     pub password: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(PhoneNumberValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(PhoneNumberValidation::<_>)]
     pub phone: String,
 
-    #[gpui_form(component(input))]
-    #[koruma(UrlValidation::<_>::builder())]
+    #[gpui_form(component(gpui_form_collection::input::Input::<_>))]
+    #[koruma(UrlValidation::<_>)]
     pub website: String,
 }
 
@@ -74,7 +76,13 @@ impl FormField {
     ];
 
     /// Writes the latest input value into the form value holder for this field.
+    ///
+    /// The gpui-form 0.6 value holder stores plain `String` fields directly
+    /// (`DirectValueStorage`), so a cleared input maps to the empty string —
+    /// which keeps the NonEmpty/Email/... validators failing exactly like the
+    /// old `Option<String>`-based holder did.
     fn set_on(self, holder: &mut RegistrationFormFormValueHolder, value: Option<String>) {
+        let value = value.unwrap_or_default();
         match self {
             FormField::Name => holder.name = value,
             FormField::Email => holder.email = value,
@@ -103,30 +111,29 @@ impl FormPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let current_data = RegistrationFormFormValueHolder::default();
 
-        let name_input = cx.new(|cx| RegistrationFormFormComponents::name_input(window, cx));
-        let email_input = cx.new(|cx| RegistrationFormFormComponents::email_input(window, cx));
-        let password_input =
-            cx.new(|cx| RegistrationFormFormComponents::password_input(window, cx));
-        let phone_input = cx.new(|cx| RegistrationFormFormComponents::phone_input(window, cx));
-        let website_input = cx.new(|cx| RegistrationFormFormComponents::website_input(window, cx));
+        let name = cx.new(|cx| RegistrationFormFormComponents::name(window, cx));
+        let email = cx.new(|cx| RegistrationFormFormComponents::email(window, cx));
+        let password = cx.new(|cx| RegistrationFormFormComponents::password(window, cx));
+        let phone = cx.new(|cx| RegistrationFormFormComponents::phone(window, cx));
+        let website = cx.new(|cx| RegistrationFormFormComponents::website(window, cx));
 
         // One parametrized closure replaces five near-identical per-field blocks.
         let _subscriptions = vec![
-            Self::subscribe_field(FormField::Name, &name_input, cx),
-            Self::subscribe_field(FormField::Email, &email_input, cx),
-            Self::subscribe_field(FormField::Password, &password_input, cx),
-            Self::subscribe_field(FormField::Phone, &phone_input, cx),
-            Self::subscribe_field(FormField::Website, &website_input, cx),
+            Self::subscribe_field(FormField::Name, &name, cx),
+            Self::subscribe_field(FormField::Email, &email, cx),
+            Self::subscribe_field(FormField::Password, &password, cx),
+            Self::subscribe_field(FormField::Phone, &phone, cx),
+            Self::subscribe_field(FormField::Website, &website, cx),
         ];
 
         Self {
             current_data,
             fields: RegistrationFormFormFields {
-                name_input,
-                email_input,
-                password_input,
-                phone_input,
-                website_input,
+                name,
+                email,
+                password,
+                phone,
+                website,
             },
             agree_terms: false,
             submitted: false,
@@ -137,10 +144,12 @@ impl FormPage {
         }
     }
 
-    /// Subscribes to an input's `InputEvent::Change` and mirrors its value into
+    /// Subscribes to an input's `InputEvent` and mirrors its value into
     /// `current_data` for `field`, marking the page dirty so the next render
-    /// re-validates. One closure parametrized by the field enum replaces five
-    /// near-identical per-field closures.
+    /// re-validates. The gpui-form 0.6 `value_change` shape helper normalizes
+    /// the event into `ValueChange::Set`/`Clear`/`Unchanged`. One closure
+    /// parametrized by the field enum replaces five near-identical per-field
+    /// closures.
     fn subscribe_field(
         field: FormField,
         input: &Entity<InputState>,
@@ -149,27 +158,24 @@ impl FormPage {
         cx.subscribe(
             input,
             move |this: &mut FormPage, state: Entity<InputState>, event: &InputEvent, cx| {
-                if let InputEvent::Change = event {
-                    let text = state.read(cx).value();
-                    let value = if text.is_empty() {
-                        None
-                    } else {
-                        Some(text.to_string())
-                    };
-                    field.set_on(&mut this.current_data, value);
-                    this.dirty = true;
-                }
+                let value = match value_change::<FormInput, String>(state.read(cx), event) {
+                    ValueChange::Set(value) => Some(value),
+                    ValueChange::Clear => None,
+                    ValueChange::Unchanged => return,
+                };
+                field.set_on(&mut this.current_data, value);
+                this.dirty = true;
             },
         )
     }
 
     fn field_input(&self, field: FormField) -> &Entity<InputState> {
         match field {
-            FormField::Name => &self.fields.name_input,
-            FormField::Email => &self.fields.email_input,
-            FormField::Password => &self.fields.password_input,
-            FormField::Phone => &self.fields.phone_input,
-            FormField::Website => &self.fields.website_input,
+            FormField::Name => &self.fields.name,
+            FormField::Email => &self.fields.email,
+            FormField::Password => &self.fields.password,
+            FormField::Phone => &self.fields.phone,
+            FormField::Website => &self.fields.website,
         }
     }
 
@@ -212,36 +218,31 @@ impl FormPage {
             self.cached_errors[FormField::Name as usize] = to_err(
                 e.name()
                     .all()
-                    .iter()
-                    .map(crate::i18n::localize_message)
+                    .map(|m| crate::i18n::localize_message(&m))
                     .collect::<Vec<String>>(),
             );
             self.cached_errors[FormField::Email as usize] = to_err(
                 e.email()
                     .all()
-                    .iter()
-                    .map(crate::i18n::localize_message)
+                    .map(|m| crate::i18n::localize_message(&m))
                     .collect::<Vec<String>>(),
             );
             self.cached_errors[FormField::Password as usize] = to_err(
                 e.password()
                     .all()
-                    .iter()
-                    .map(crate::i18n::localize_message)
+                    .map(|m| crate::i18n::localize_message(&m))
                     .collect::<Vec<String>>(),
             );
             self.cached_errors[FormField::Phone as usize] = to_err(
                 e.phone()
                     .all()
-                    .iter()
-                    .map(crate::i18n::localize_message)
+                    .map(|m| crate::i18n::localize_message(&m))
                     .collect::<Vec<String>>(),
             );
             self.cached_errors[FormField::Website as usize] = to_err(
                 e.website()
                     .all()
-                    .iter()
-                    .map(crate::i18n::localize_message)
+                    .map(|m| crate::i18n::localize_message(&m))
                     .collect::<Vec<String>>(),
             );
         } else {

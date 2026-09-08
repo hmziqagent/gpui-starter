@@ -22,11 +22,13 @@ test:
 test-publish:
     cargo publish --workspace --dry-run --allow-dirty
 
-# Use local path checkout for gpui-query (for active development of gpui-query).
+# Use local path checkout for gpui-query (for active development of gpui-query;
+# branch gpui-pre-0.6 there mirrors the default git rev).
 gpui-query-local:
     ./scripts/toggle-gpui-query.sh local
 
-# Use crates.io published version of gpui-query (run before committing).
+# Use the default git rev of gpui-query (run before committing). Named for
+# symmetry; the registry has neither the release fix nor gpui-pre support.
 gpui-query-cratesio:
     ./scripts/toggle-gpui-query.sh cratesio
 

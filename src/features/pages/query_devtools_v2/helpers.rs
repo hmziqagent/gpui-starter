@@ -72,7 +72,7 @@ pub(super) fn filter_button(
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(super) fn format_cache_age(age_ms: Option<u128>) -> String {
+pub(super) fn format_cache_age(age_ms: Option<u64>) -> String {
     match age_ms {
         None => "n/a".to_string(),
         Some(ms) => {

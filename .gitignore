@@ -30,3 +30,6 @@ package-lock.json
 .playwright-*/
 
 tests/snapshots/
+
+# z-workflow orchestration state
+.z-workflow/

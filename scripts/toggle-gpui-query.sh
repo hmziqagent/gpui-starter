@@ -7,8 +7,9 @@ GPUI_QUERY_PATH="${GPUI_QUERY_PATH:-/Users/hmziq/fo/gpui-query}"
 
 MARKER_START="# >>> gpui-query-local >>>"
 MARKER_END="# <<< gpui-query-local <<<"
-# DEFAULT: published 0.1.4 + release-profile AppContext fix (see Cargo.toml).
-DEFAULT_LINE='gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "f84eac4be3c46c1d7e5d8cffb8b6a898d4526f73" }'
+# DEFAULT: branch gpui-pre-0.6 @81b0a33 = v0.2.0 + release-profile fix + the
+# one-line gpui-pre manifest swap (see Cargo.toml [patch.crates-io] comment).
+DEFAULT_LINE='gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "81b0a33066fd48ca759aecef83555f9f460ef489" }'
 LOCAL_LINE="gpui-query = { path = \"$GPUI_QUERY_PATH/crates/gpui-query\" }"
 
 usage() {
@@ -16,16 +17,19 @@ usage() {
 Usage: just gpui-query-local | just gpui-query-cratesio | just gpui-query-status
 
 Toggles the gpui-query [patch.crates-io] source between the live standalone
-checkout ($GPUI_QUERY_PATH) and the default git rev (0.1.4 + the
-release-profile AppContext import fix that no published version carries).
+checkout ($GPUI_QUERY_PATH — branch gpui-pre-0.6) and the default git rev
+(v0.2.0 + release-profile fix + the gpui-pre manifest swap; no published
+version carries either).
 
 Exactly ONE of the two lines in the marker block is active at a time —
 a duplicate gpui-query key in [patch.crates-io] is a TOML parse error.
 
 Commands:
-  local     Use the standalone path checkout (active dev of gpui-query).
+  local     Use the standalone path checkout (active dev of gpui-query;
+            branch gpui-pre-0.6 there mirrors the default git rev).
   cratesio  Use the default git rev (run before committing). Named for
-            symmetry; the registry itself does not build in release profile.
+            symmetry; the registry itself has neither the release fix nor
+            gpui-pre support.
   status    Print the currently active source.
 
 Env:
@@ -75,7 +79,7 @@ status() {
     END { print (l ? "local" : (d ? "git" : "unknown")) }
   ' "$CARGO_TOML")" in
     local) echo "gpui-query source: LOCAL ($GPUI_QUERY_PATH)" ;;
-    git)   echo "gpui-query source: git hmziqagent/gpui-query@f84eac4 (0.1.4 + release fix)" ;;
+    git)   echo "gpui-query source: git hmziqagent/gpui-query@81b0a33 (branch gpui-pre-0.6: v0.2.0 + release fix + gpui-pre swap)" ;;
     *)     echo "gpui-query source: UNKNOWN (marker block has no active line)" >&2; exit 1 ;;
   esac
 }
@@ -88,7 +92,7 @@ case "${1:-status}" in
     ;;
   cratesio)
     toggle cratesio
-    echo "Toggled to default git rev (0.1.4 + release-profile fix)"
+    echo "Toggled to default git rev (branch gpui-pre-0.6: v0.2.0 + release fix + gpui-pre swap)"
     ;;
   status)
     status

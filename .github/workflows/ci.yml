@@ -6,8 +6,10 @@ on:
   pull_request:
     branches: [master]
 
-# CI env for the Zed gpui + gpui-component + gpui-form graph. These knobs are
-# peak-RSS / target/-hygiene for the 14 GB runner (not correctness needs):
+# CI env for the gpui-pre (crates.io snapshot of Zed gpui) + gpui-kit (crate
+# gpui-component) + gpui-form graph.
+# These knobs are peak-RSS / target/-hygiene for the 14 GB runner (not
+# correctness needs):
 #   - CARGO_BUILD_JOBS=2, *_CODEGEN_UNITS=256, *_DEBUG=none, CARGO_INCREMENTAL=0.
 # NOTE: the previous RUST_MIN_STACK=512 MiB + recursion_limit=8192 were a band-aid
 # over a `#[test]` → `gpui::test` glob-shadow that recursed infinitely and
@@ -50,11 +52,12 @@ jobs:
 
   # ---------------------------------------------------------------------
   # NOTE: there is no WORKSPACE-WIDE `cargo test` job here. A full `cargo test`
-  # does codegen of the entire Zed gpui + gpui-component + gpui-form graph
+  # does codegen of the entire gpui-pre + gpui-kit + gpui-form graph
   # (~13 GB of target/), which on the macOS runner is a multi-HOUR build that
   # exceeds GitHub's 6 h job limit. There is no fast subset either: every
   # crate's tests — even gpui-query's no-gpui `core` feature — import gpui's
-  # `TestAppContext`, so they all require compiling Zed from source.
+  # `TestAppContext`, so they all require compiling the whole gpui stack from
+  # source (crates.io sources, not precompiled).
   #
   # Coverage is not lost for the "does it build?" question: the `check` job
   # type-checks AND macro-expands the WHOLE codebase (forms included) in ~8
@@ -112,8 +115,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Keep the Linux target cache fully separate from the macOS lane:
-          # the gpui git workspace dep is compiled with different cfg flags
-          # (x11/wayland) and a shared key would be poisoned across runners.
+          # the gpui (gpui-pre) dependency is compiled with different cfg
+          # flags (x11/wayland) and a shared key would be poisoned across
+          # runners.
           prefix-key: "v2-linux"
 
       - name: Cargo check (dev)
@@ -153,9 +157,9 @@ jobs:
   test:
     name: Test (lib, Linux)
     runs-on: ubuntu-latest
-    # Full codegen of the zed git graph. A warm rust-cache + sccache keeps
-    # this well under 30 min, but ANY Cargo.lock change (dep bump, new pin)
-    # invalidates the key and the cold rebuild needs 60-100+ min at
+    # Full codegen of the gpui dependency graph. A warm rust-cache + sccache
+    # keeps this well under 30 min, but ANY Cargo.lock change (dep bump, new
+    # pin) invalidates the key and the cold rebuild needs 60-100+ min at
     # CARGO_BUILD_JOBS=2 — the original 30-min cap killed exactly that run
     # (PR #6's first attempt: cancelled at 30m17s with rustc mid-compile).
     timeout-minutes: 120

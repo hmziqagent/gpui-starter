@@ -2,6 +2,17 @@
 
 GPUI Starter is a desktop application boilerplate built with the [GPUI](https://github.com/zed-industries/zed) framework from Zed, targeting macOS (with Linux support). It ships working implementations of the cross-cutting concerns every desktop app needs — persisted settings, i18n, theming, background tasks, telemetry, notifications, diagnostics, and an in-app command palette — so you can start building your own features on day one.
 
+## Dependency Foundations
+
+The UI foundation is [GPUI Kit](https://github.com/longbridge/gpui-kit) 0.6.0 from crates.io (`gpui-kit` + `gpui-component` + `gpui-kit-assets`), built on `gpui-pre` — the crates.io snapshot of Zed's `gpui` (package renamed `gpui-pre`, lib name still `gpui`). Every crate in the graph resolves to exactly ONE gpui copy; that single-copy discipline drives every override below. Supply-chain note: `gpui-pre` is published by the kit maintainer as a snapshot of `zed-industries/zed`, so the UI foundation depends on that publishing pipeline rather than on Zed's own crates.io releases (which stop at 0.2.x).
+
+Two libraries are not gpui-pre-native upstream yet, so we override them — never by vendoring (copying their sources into this repo as path deps is forbidden: it forks maintenance and defeats review/update):
+
+- **gpui-form** — pinned as a git dependency to canonical upstream `stayhydated/gpui-form` master @`216af496` ("fix gpui-kit 0.6.0 CI", CI-green 2026-09-07; `gpui-form` + `gpui-form-collection` at the same rev = one checkout). Its own `[patch]` section is ignored downstream, so its gpui resolves through the registry to the same `gpui-pre` as ours. crates.io still ships only the pre-0.6 architecture; the freeoxide fork @`2604a5e` (0.5.2, zed-git line) stays frozen as the Phase-1 rollback path. `koruma` 0.11 and `es-fluent` 0.18.1 follow upstream's stayhydated git pins.
+- **gpui-query** — no published or upstream version targets gpui-pre, so a `[patch.crates-io]` override points the registry requirement (`>=0.1.4, <0.3.0`) at our fork branch `gpui-pre-0.6` @`81b0a33` on hmziqagent/gpui-query: published v0.2.0 + release-profile fix with ONE root-manifest line swapped to `gpui = { package = "gpui-pre", version = "0.3" }`. The branch is purely additive and upstreamable — drop the patch once gpui-query ships gpui-pre support on crates.io.
+
+Rollback for the whole Phase-2 swap is `git revert 32bc8c4` (this also restores the Phase-1 `gpui-query` pin `f84eac4`, orphaned but still fetchable). Under form 0.6 the generated `<N>FormFields`/`<N>FormComponents` members use the raw field names (`name`, not the 0.5 fork's `name_input`).
+
 ## Module Map
 
 Every module lives under `src/`. Modules that depend on other modules are noted with arrows.

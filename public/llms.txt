@@ -41,7 +41,7 @@ Requires Rust (2024 edition). macOS: Xcode Command Line Tools. Linux: Vulkan + X
 
 - Rust (2024 edition)
 - GPUI (GPU-accelerated UI framework from Zed)
-- gpui-component (UI component library)
+- gpui-component (UI component library from gpui-kit)
 - gpui-form (form builder with derive macros)
 - es-fluent (Mozilla Fluent i18n)
 - koruma (validation)

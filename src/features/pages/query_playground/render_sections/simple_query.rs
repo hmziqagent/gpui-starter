@@ -33,7 +33,8 @@ impl QueryPlaygroundPage {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis();
-                r.last_updated_at_ms().map(|t| now.saturating_sub(t))
+                r.last_updated_at_ms()
+                    .map(|t| now.saturating_sub(u128::from(t)))
             })
         });
         let bg = cx.theme().background;
