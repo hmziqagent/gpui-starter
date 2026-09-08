@@ -24,7 +24,7 @@ import satori from 'satori';
 import { Resvg } from '@resvg/resvg-js';
 
 const ROOT = resolve(import.meta.dirname, '..');
-const CONTENT = join(ROOT, 'web/content');
+const CONTENT = join(ROOT, 'content');
 const DEFAULT_OUT = join(ROOT, 'public');
 const SITE = 'gpui-starter.freeoxide.com';
 
@@ -44,7 +44,8 @@ const T = {
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
 const onlyMissing = args.includes('--only-missing');
-const outRoot = outIdx !== -1 ? resolve(args[outIdx + 1]) : DEFAULT_OUT;
+const outVal = outIdx !== -1 ? args[outIdx + 1] : undefined;
+const outRoot = outVal ? resolve(outVal) : DEFAULT_OUT;
 const filterArg = args.filter((a) => !a.startsWith('--') && (outIdx === -1 || args.indexOf(a) !== outIdx + 1))[0];
 
 // --- frontmatter parser (no extra dep) ---
@@ -52,7 +53,7 @@ function parseFrontmatter(src: string): Record<string, string | string[]> {
   const match = src.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return {};
   const result: Record<string, string | string[]> = {};
-  for (const line of match[1].split('\n')) {
+  for (const line of (match[1] ?? '').split('\n')) {
     const colon = line.indexOf(':');
     if (colon === -1) continue;
     const key = line.slice(0, colon).trim();
@@ -294,7 +295,7 @@ async function renderCard(card: Card): Promise<Buffer> {
           ]),
         ]),
       ],
-    ) as unknown as React.ReactNode,
+    ) as unknown as Parameters<typeof satori>[0],
     { width: 1200, height: 630, fonts: FONTS },
   );
 

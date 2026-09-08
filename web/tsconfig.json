@@ -1,5 +1,6 @@
 {
-  "include": ["web", "src"],
+  "include": ["**/*"],
+  "exclude": ["dist"],
   "compilerOptions": {
     "lib": ["ESNext"],
     "target": "ESNext",
@@ -9,7 +10,6 @@
     "allowJs": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "paths": { "@/*": ["./src/*"] },
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "strict": true,
