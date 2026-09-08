@@ -108,6 +108,10 @@ nix build .#default   # produces a release binary in result/bin/gpui-starter
 
 See [docs/gpui-architecture.md](docs/gpui-architecture.md) for an overview of the module layout and data flow.
 
+## Marketing Site
+
+The marketing/docs site lives entirely in [`web/`](web/) (Astro on Bun), fully separate from the desktop app. Boilerplate users who don't want it can delete the `web/` folder and the `.github/workflows/deploy-docs.yml` workflow without touching the app.
+
 ## Themes
 
 23 built-in themes with live hot-reloading -- drop a JSON file into `themes/` and it appears instantly. Highlights include:
