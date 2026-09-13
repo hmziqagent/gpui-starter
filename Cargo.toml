@@ -16,7 +16,7 @@ gpui-form = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b
 gpui-form-collection = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b2551d1b7be83b12e519cd0c908c28ff" }
 
 # GPUI ecosystem — crates.io `gpui-pre` is the published snapshot of zed gpui
-# (PACKAGE name gpui-pre, lib name stays `gpui`); gpui-kit 0.6.0 builds on it.
+# (PACKAGE name gpui-pre, lib name stays `gpui`); gpui-kit 0.6.1 builds on it.
 # gpui-kit is listed directly because gpui-form's derives emit ::gpui_kit::
 # paths into consuming crates; gpui-kit-assets replaces gpui-component-assets
 # (the old longbridge/gpui-component git URL is retired with the zed patches).
@@ -27,9 +27,9 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
     "wayland",
     "runtime_shaders",
 ] }
-gpui-kit = "0.6.0"
-gpui-component = "0.6.0"
-gpui-kit-assets = "0.6.0"
+gpui-kit = "0.6.1"
+gpui-component = "0.6.1"
+gpui-kit-assets = "0.6.1"
 
 # Serialization & data
 anyhow = "1"
