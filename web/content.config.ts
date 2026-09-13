@@ -10,7 +10,7 @@ export const collections = {
     schema: docsSchema(),
   }),
   blog: defineCollection({
-    loader: glob({ pattern: "**/*.md", base: "./web/content/blog" }),
+    loader: glob({ pattern: "**/*.md", base: "./content/blog" }),
     schema: z.object({
       title: z.string(),
       description: z.string(),
@@ -21,7 +21,7 @@ export const collections = {
     }),
   }),
   faq: defineCollection({
-    loader: glob({ pattern: "**/*.md", base: "./web/content/faq" }),
+    loader: glob({ pattern: "**/*.md", base: "./content/faq" }),
     schema: z.object({
       question: z.string(),
       description: z.string(),

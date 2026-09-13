@@ -51,7 +51,7 @@ function generateStaticAssets() {
 
 export default defineConfig({
   site: "https://gpui-starter.freeoxide.com",
-  srcDir: "./web",
+  srcDir: ".",
   vite: {
     plugins: [tailwindcss(), serveLocalAudio()],
   },
@@ -120,7 +120,7 @@ export default defineConfig({
           ],
         },
       ],
-      customCss: ["/web/styles/starlight.css"],
+      customCss: ["/styles/starlight.css"],
       lastUpdated: true,
       head: [
         { tag: 'meta', attrs: { property: 'og:title', content: 'gpui-starter Documentation' } },
@@ -137,7 +137,7 @@ export default defineConfig({
         },
       ],
       components: {
-        Head: "./web/components/StarlightHead.astro",
+        Head: "./components/StarlightHead.astro",
       },
       favicon: "/favicon.svg",
     }),

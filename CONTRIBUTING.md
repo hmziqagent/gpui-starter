@@ -25,6 +25,8 @@ cargo build
 
 The first build takes a while because it compiles GPUI and all dependencies. Subsequent builds are faster thanks to incremental compilation.
 
+**Marketing site (optional):** the Astro docs site lives entirely in `web/` and is independent of the desktop app — `cd web && bun install && bun run docs:dev` to work on it. Boilerplate users can delete `web/` and `.github/workflows/deploy-docs.yml` without affecting the app.
+
 ## Development Workflow
 
 Use the provided shell script for fast iteration. It builds the binary, wraps it in a `.app` bundle, and signs it locally:

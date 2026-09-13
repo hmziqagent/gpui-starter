@@ -5,10 +5,6 @@ on:
     branches: [master]
     paths:
       - 'web/**'
-      - 'public/**'
-      - 'scripts/**'
-      - 'astro.config.mjs'
-      - 'package.json'
       - 'CHANGELOG.md'
   workflow_dispatch:
 
@@ -31,13 +27,15 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+        working-directory: web
 
       - name: Build docs
         run: bun run docs:build
+        working-directory: web
 
       - name: Deploy Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy ./dist --project-name=gpui-starter --branch=master
+          command: pages deploy ./web/dist --project-name=gpui-starter --branch=master
