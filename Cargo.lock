@@ -4011,6 +4011,7 @@ dependencies = [
  "url",
  "user-notify",
  "uuid",
+ "wasm-bindgen",
  "wayland-client",
  "wayland-protocols-wlr",
 ]

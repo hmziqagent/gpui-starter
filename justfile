@@ -16,6 +16,18 @@ clippy:
 check:
     cargo check --workspace --all-features --exclude some-lib-forms
 
+# Web (wasm32-unknown-unknown) support. NIGHTLY is required: the locked
+# wasm_thread 0.3.3 (via the gpui web backend) uses
+# `#![feature(stdarch_wasm_atomic_wait)]`, rejected on stable.
+# Deps are manifest-gated per target in Cargo.toml; the lib source fences
+# are the platform-stubbing work's concern.
+wasm-check:
+    cargo +nightly check --target wasm32-unknown-unknown -p gpui-starter --lib
+
+# Build the web artifact (lib cdylib) for wasm-bindgen post-processing.
+wasm-build:
+    cargo +nightly build --target wasm32-unknown-unknown --lib
+
 test:
     cargo test --workspace --all-features
 
