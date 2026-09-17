@@ -109,8 +109,12 @@ pub fn init(cx: &mut App) {
     };
     set_locale(&locale_to_use, cx);
 
-    // Load extra themes from the themes/ directory (with hot-reload)
+    // Load extra themes from the themes/ directory (with hot-reload).
+    // Native uses the filesystem watcher; wasm has no `watch_dir` (and no
+    // writable themes dir) — themes come from the embedded asset source and
+    // the persisted theme is applied directly if registered.
     let persisted_theme = persisted.theme.clone();
+    #[cfg(not(target_family = "wasm"))]
     if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
         std::path::PathBuf::from(format!("{}/themes", env!("CARGO_MANIFEST_DIR"))),
         cx,
@@ -126,6 +130,15 @@ pub fn init(cx: &mut App) {
     ) {
         tracing::error!("Failed to watch themes directory: {}", err);
         crate::lifecycle::set_startup_error(format!("theme watch failed: {err}"), cx);
+    }
+
+    #[cfg(target_family = "wasm")]
+    if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
+        .themes()
+        .get(persisted_theme.as_str())
+        .cloned()
+    {
+        gpui_component::Theme::global_mut(cx).apply_config(&theme);
     }
 
     if let Some(show) = persisted.scrollbar_show {
@@ -179,38 +192,46 @@ pub fn init(cx: &mut App) {
         crate::session::initialize(cx);
         crate::storage::initialize(cx);
 
-        // Run database migrations after storage is initialized
-        crate::lifecycle::set_startup_step("db_migrations", cx);
-        let migrations_t = std::time::Instant::now();
-        if let Some(snapshot) = cx.try_global::<crate::storage::StorageSnapshot>()
-            && snapshot.available
+        // Run database migrations after storage is initialized.
+        // (SQLite is native-only; wasm storage is always unavailable, so the
+        // snapshot.available guard below never passes there.)
+        #[cfg(not(target_family = "wasm"))]
         {
-            let db_path = std::path::PathBuf::from(snapshot.db_path.clone());
-            match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => match crate::db_migrations::run_migrations(&conn) {
-                    Ok(version) => {
-                        tracing::info!(
-                            target: "gpui_starter::startup",
-                            version,
-                            elapsed_ms = migrations_t.elapsed().as_millis() as u64,
-                            "db_migrations complete"
-                        );
-                    }
+            crate::lifecycle::set_startup_step("db_migrations", cx);
+            let migrations_t = std::time::Instant::now();
+            if let Some(snapshot) = cx.try_global::<crate::storage::StorageSnapshot>()
+                && snapshot.available
+            {
+                let db_path = std::path::PathBuf::from(snapshot.db_path.clone());
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => match crate::db_migrations::run_migrations(&conn) {
+                        Ok(version) => {
+                            tracing::info!(
+                                target: "gpui_starter::startup",
+                                version,
+                                elapsed_ms = migrations_t.elapsed().as_millis() as u64,
+                                "db_migrations complete"
+                            );
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                target: "gpui_starter::startup",
+                                error = %err,
+                                "db_migrations failed"
+                            );
+                            crate::lifecycle::set_startup_error(
+                                format!("migration failed: {err}"),
+                                cx,
+                            );
+                        }
+                    },
                     Err(err) => {
                         tracing::error!(
                             target: "gpui_starter::startup",
                             error = %err,
-                            "db_migrations failed"
+                            "failed to open db for migrations"
                         );
-                        crate::lifecycle::set_startup_error(format!("migration failed: {err}"), cx);
                     }
-                },
-                Err(err) => {
-                    tracing::error!(
-                        target: "gpui_starter::startup",
-                        error = %err,
-                        "failed to open db for migrations"
-                    );
                 }
             }
         }

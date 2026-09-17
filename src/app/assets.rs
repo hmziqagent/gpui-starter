@@ -12,8 +12,15 @@ use std::borrow::Cow;
 use gpui::{AssetSource, Result, SharedString};
 
 /// Project-local embedded assets (theme JSON shipped under `themes/`).
+///
+/// The folder path is deliberately RELATIVE: without rust-embed's
+/// `interpolate-folder-path` feature, `$CARGO_MANIFEST_DIR/themes` is treated
+/// as a literal (nonexistent) path — which compiles in dev-native (runtime
+/// fs mode) but breaks every build that embeds at compile time (release
+/// native and wasm). A relative folder is resolved against the crate root by
+/// rust-embed and embeds correctly everywhere.
 #[derive(rust_embed::RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/themes"]
+#[folder = "themes"]
 struct ProjectAssets;
 
 /// A merged [`AssetSource`] combining gpui-kit assets with project assets.
@@ -24,7 +31,13 @@ pub struct CombinedAssets {
 impl CombinedAssets {
     pub fn new() -> Self {
         Self {
+            // Native: RustEmbed unit struct (icons embedded in the binary).
+            // Wasm: gpui-kit-assets swaps to an on-demand CDN source (empty
+            // endpoint = relative to the served page).
+            #[cfg(not(target_family = "wasm"))]
             component: gpui_kit_assets::Assets,
+            #[cfg(target_family = "wasm")]
+            component: gpui_kit_assets::Assets::default(),
         }
     }
 }

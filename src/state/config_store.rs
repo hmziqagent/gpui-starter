@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashSet;
+#[cfg(not(target_family = "wasm"))]
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-};
 
+#[cfg(not(target_family = "wasm"))]
 use atomic_write_file::AtomicWriteFile;
 use gpui::{App, BorrowAppContext, Global};
 // Renamed upstream at gpui-component 5a5e2ab; variant names (and so the
@@ -18,9 +18,12 @@ use crate::{
     app::{LOCALE_EN, LOCALE_ZH_CN},
     errors::AppError,
     notifications::inbox::NotificationInboxItem,
-    paths::{AppPaths, ensure_parent_dir},
+    paths::AppPaths,
     routes::AppRoute,
 };
+// Atomic-write persistence helpers are native-only (see `save_config`).
+#[cfg(not(target_family = "wasm"))]
+use crate::paths::ensure_parent_dir;
 
 /// Duration (in milliseconds) to wait after the last config mutation before
 /// flushing to disk. Rapid successive calls to [`update_config`] are coalesced
@@ -140,12 +143,22 @@ fn default_show_frame_time() -> bool {
 pub fn initialize(cx: &mut App) {
     let paths = match AppPaths::new() {
         Ok(paths) => paths,
+        // wasm has no OS standard directories — degrade to the in-memory
+        // fallback (default config, no disk persistence) instead of bailing.
+        #[cfg(target_family = "wasm")]
+        Err(_) => AppPaths::fallback(),
+        #[cfg(not(target_family = "wasm"))]
         Err(err) => {
             tracing::error!(target: "gpui_starter::app_state", error = %err, "failed to initialize app paths");
             return;
         }
     };
 
+    // wasm has no readable state file (fallback path is empty) — start from
+    // defaults instead of attempting a filesystem load.
+    #[cfg(target_family = "wasm")]
+    let (config, last_load_error) = (AppConfig::default(), None);
+    #[cfg(not(target_family = "wasm"))]
     let (config, last_load_error) = load_config(&paths.state_file);
     tracing::info!(
         target: "gpui_starter::app_state",
@@ -211,7 +224,16 @@ pub fn paths(cx: &App) -> AppPaths {
         .map(|s| s.paths.clone())
         .unwrap_or_else(|| {
             tracing::error!(target: "gpui_starter::app_state", "AppState not initialized, using fallback paths");
-            AppPaths::new().expect("failed to initialize fallback app paths")
+            // wasm: no OS directories exist — never panic on the missing
+            // ProjectDirs, degrade to the in-memory fallback instead.
+            #[cfg(target_family = "wasm")]
+            {
+                AppPaths::fallback()
+            }
+            #[cfg(not(target_family = "wasm"))]
+            {
+                AppPaths::new().expect("failed to initialize fallback app paths")
+            }
         })
 }
 
@@ -472,27 +494,38 @@ fn load_config(path: &Path) -> (AppConfig, Option<String>) {
 
 /// Writes pre-serialized bytes to the config file using an atomic write.
 fn save_config(path: &Path, json_bytes: &[u8]) -> Result<(), AppError> {
-    ensure_parent_dir(path)?;
-    let mut file = AtomicWriteFile::options()
-        .open(path)
-        .map_err(|err| AppError::StateWrite {
+    // wasm has no writable config directory (fallback path is empty) — treat
+    // persistence as a no-op so the in-memory config stays authoritative.
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (path, json_bytes);
+        return Ok(());
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        ensure_parent_dir(path)?;
+        let mut file =
+            AtomicWriteFile::options()
+                .open(path)
+                .map_err(|err| AppError::StateWrite {
+                    path: path.to_path_buf(),
+                    details: err.to_string(),
+                })?;
+        file.write_all(json_bytes)
+            .map_err(|err| AppError::StateWrite {
+                path: path.to_path_buf(),
+                details: err.to_string(),
+            })?;
+        file.write_all(b"\n").map_err(|err| AppError::StateWrite {
             path: path.to_path_buf(),
             details: err.to_string(),
         })?;
-    file.write_all(json_bytes)
-        .map_err(|err| AppError::StateWrite {
+        file.commit().map_err(|err| AppError::StateWrite {
             path: path.to_path_buf(),
             details: err.to_string(),
         })?;
-    file.write_all(b"\n").map_err(|err| AppError::StateWrite {
-        path: path.to_path_buf(),
-        details: err.to_string(),
-    })?;
-    file.commit().map_err(|err| AppError::StateWrite {
-        path: path.to_path_buf(),
-        details: err.to_string(),
-    })?;
-    Ok(())
+        Ok(())
+    }
 }
 
 fn quarantine_bad_config(path: &Path) {

@@ -83,13 +83,14 @@ pub fn report(
         actions,
     };
     let id = record.id;
+    #[cfg(not(target_family = "wasm"))]
     let record_clone = record.clone();
     let message_str = record.message.clone();
 
     // Track the error message so the panic handler can attach it to crash reports.
     crate::lifecycle::track_recent_error(message_str);
 
-    cx.update_global::<ErrorSurfaceState, _>(|state, cx| {
+    cx.update_global::<ErrorSurfaceState, _>(|state, _cx| {
         state.records.insert(0, record);
         if state.records.len() > 200 {
             state.records.truncate(200);
@@ -99,10 +100,11 @@ pub fn report(
         // dispatched to the background executor so the UI thread never blocks
         // on database I/O (mirrors the storage runtime pattern in
         // `services/storage/runtime.rs`). Only the in-memory mutation above
-        // must happen synchronously.
-        if let Some(runtime) = cx.try_global::<crate::storage::StorageRuntime>() {
+        // must happen synchronously. (Native only — wasm has no SQLite.)
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(runtime) = _cx.try_global::<crate::storage::StorageRuntime>() {
             let backend = runtime.backend.clone();
-            cx.background_executor()
+            _cx.background_executor()
                 .spawn(async move {
                     if let Err(err) = persist_error(&*backend, &record_clone) {
                         tracing::warn!(
@@ -156,6 +158,7 @@ pub fn dismiss(id: EventId, cx: &mut App) {
 /// The `error_log` table migration is defined in `db_migrations` (version 2).
 /// If the table does not exist yet this call will fail and the in-memory store
 /// remains authoritative.
+#[cfg(not(target_family = "wasm"))]
 pub fn persist_error(
     db: &dyn crate::storage::StorageBackend,
     error: &ErrorRecord,
@@ -165,6 +168,7 @@ pub fn persist_error(
 
 /// Load the most recent `limit` error records from SQLite, ordered by
 /// occurrence time descending (newest first).
+#[cfg(not(target_family = "wasm"))]
 pub fn load_error_history(
     db: &dyn crate::storage::StorageBackend,
     limit: usize,

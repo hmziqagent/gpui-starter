@@ -1,18 +1,35 @@
+#[cfg(not(target_family = "wasm"))]
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{App, BorrowAppContext as _, Global};
+use gpui::App;
+#[cfg(not(target_family = "wasm"))]
+use gpui::Global;
 
-use super::backend::SqliteStorage;
-use super::{StorageBackend, StorageSnapshot};
+#[cfg(not(target_family = "wasm"))]
+use gpui::BorrowAppContext as _;
 
+use super::StorageSnapshot;
+
+#[cfg(not(target_family = "wasm"))]
+use super::StorageBackend;
+
+/// GPUI Global holding the shared storage backend.
+///
+/// Native-only: the SQLite backend (and `rusqlite` itself) has no
+/// wasm32-unknown-unknown story, so this global simply does not exist on wasm.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Clone)]
 pub struct StorageRuntime {
     pub(crate) backend: Arc<dyn StorageBackend>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Global for StorageRuntime {}
 
+#[cfg(not(target_family = "wasm"))]
 pub fn initialize(cx: &mut App) {
+    use super::backend::SqliteStorage;
+
     let path = db_path(cx);
     let backend = Arc::new(SqliteStorage::new(path.clone()));
     let mut snapshot = StorageSnapshot {
@@ -75,6 +92,37 @@ pub fn initialize(cx: &mut App) {
     cx.set_global(StorageRuntime { backend });
 }
 
+/// Wasm: no SQLite — record an unavailable snapshot so the diagnostics UI and
+/// capability registry degrade gracefully instead of reporting a live backend.
+#[cfg(target_family = "wasm")]
+pub fn initialize(cx: &mut App) {
+    let snapshot = StorageSnapshot {
+        available: false,
+        db_path: String::new(),
+        schema_version: 0,
+        healthy: false,
+        last_maintenance_at: None,
+        last_migration_result: Some("sqlite storage unavailable on wasm".to_string()),
+        last_error: Some("sqlite storage unavailable on wasm".to_string()),
+    };
+    tracing::info!(
+        target: "gpui_starter::storage",
+        "storage degraded: sqlite unavailable on wasm"
+    );
+    crate::capabilities::set(
+        "storage",
+        crate::capabilities::CapabilityStatus {
+            supported: false,
+            enabled: false,
+            degraded: true,
+            reason: Some("sqlite storage unavailable on wasm".into()),
+            last_error: snapshot.last_error.clone().map(Into::into),
+        },
+        cx,
+    );
+    cx.set_global(snapshot);
+}
+
 pub fn snapshot(cx: &App) -> StorageSnapshot {
     cx.try_global::<StorageSnapshot>()
         .cloned()
@@ -86,6 +134,7 @@ pub fn snapshot(cx: &App) -> StorageSnapshot {
 ///
 /// The result is written back to the global [`StorageSnapshot`] via an
 /// `cx.update` callback once the check completes.
+#[cfg(not(target_family = "wasm"))]
 pub fn run_health_check(cx: &mut App) {
     let Some(runtime) = cx.try_global::<StorageRuntime>().cloned() else {
         return;
@@ -123,6 +172,7 @@ pub fn run_health_check(cx: &mut App) {
 ///
 /// The result is written back to the global [`StorageSnapshot`] via an
 /// `cx.update` callback once maintenance completes.
+#[cfg(not(target_family = "wasm"))]
 pub fn run_maintenance(cx: &mut App) {
     let Some(runtime) = cx.try_global::<StorageRuntime>().cloned() else {
         return;
@@ -147,6 +197,15 @@ pub fn run_maintenance(cx: &mut App) {
     .detach();
 }
 
+/// Wasm: no SQLite backend exists — health checks are a no-op (the snapshot
+/// already records `available: false` from [`initialize`]).
+#[cfg(target_family = "wasm")]
+pub fn run_health_check(_cx: &mut App) {}
+
+/// Wasm: no SQLite backend exists — maintenance is a no-op.
+#[cfg(target_family = "wasm")]
+pub fn run_maintenance(_cx: &mut App) {}
+
 pub fn shutdown(cx: &mut App) {
     let snapshot = snapshot(cx);
     tracing::debug!(
@@ -158,10 +217,12 @@ pub fn shutdown(cx: &mut App) {
     );
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn db_path(cx: &App) -> PathBuf {
     crate::app_state::paths(cx).data_dir.join("app.db")
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn init_db(path: &PathBuf) -> rusqlite::Result<i64> {
     let conn = rusqlite::Connection::open(path)?;
     conn.execute_batch(

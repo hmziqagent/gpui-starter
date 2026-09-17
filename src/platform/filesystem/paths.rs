@@ -54,6 +54,21 @@ impl AppPaths {
             state_file,
         })
     }
+
+    /// In-memory fallback used on wasm, where `directories` cannot resolve OS
+    /// standard directories. Every path is empty — persistence layers treat
+    /// writes against these as no-ops and run from defaults.
+    #[cfg(target_family = "wasm")]
+    pub fn fallback() -> Self {
+        Self {
+            config_dir: PathBuf::new(),
+            data_dir: PathBuf::new(),
+            cache_dir: PathBuf::new(),
+            log_dir: PathBuf::new(),
+            runtime_dir: PathBuf::new(),
+            state_file: PathBuf::new(),
+        }
+    }
 }
 
 pub fn ensure_parent_dir(path: &Path) -> Result<(), AppError> {

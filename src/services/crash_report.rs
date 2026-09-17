@@ -2,7 +2,10 @@
 
 use std::path::Path;
 
-use gpui::{App, BorrowAppContext as _, Global};
+use gpui::App;
+#[cfg(not(target_family = "wasm"))]
+use gpui::BorrowAppContext as _;
+use gpui::Global;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -160,6 +163,10 @@ pub fn detect_pending_reports(data_dir: &Path) -> Vec<CrashReport> {
 ///
 /// Silently returns when the upload endpoint is empty or the storage backend
 /// is not available.
+///
+/// Wasm: there is no SQLite backend to load pending reports from, so the
+/// upload path is a no-op.
+#[cfg(not(target_family = "wasm"))]
 pub fn upload_pending_reports(cx: &mut App) {
     let snap = snapshot(cx);
     if snap.upload_endpoint.is_empty() {
@@ -308,6 +315,16 @@ pub fn upload_pending_reports(cx: &mut App) {
 // ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
+
+/// Wasm counterpart of [`upload_pending_reports`]: no SQLite backend exists,
+/// so there is nothing to upload.
+#[cfg(target_family = "wasm")]
+pub fn upload_pending_reports(_cx: &mut App) {
+    tracing::debug!(
+        target: "gpui_starter::crash_report",
+        "crash report upload unavailable on wasm (no sqlite backend)"
+    );
+}
 
 pub fn shutdown(cx: &mut App) {
     tracing::debug!(

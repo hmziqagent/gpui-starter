@@ -4,12 +4,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(not(target_family = "wasm"))]
 use arboard::Clipboard;
 use gpui::{App, BorrowAppContext as _, Global};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopActionError {
+    #[cfg(not(target_family = "wasm"))]
     #[error("clipboard operation failed: {0}")]
     Clipboard(#[from] arboard::Error),
     #[error("failed to open path '{path}'")]
@@ -69,8 +71,17 @@ struct DesktopActionsInner {
 impl Global for DesktopActionsState {}
 
 pub fn initialize(cx: &mut App) {
+    // arboard (clipboard) has no wasm backend; rfd's FileDialog and the
+    // `open` crate are compiled out on wasm too — report those as
+    // unavailable, keep the (never-firing) notify watchers working.
+    #[cfg(not(target_family = "wasm"))]
+    let clipboard_ok = Clipboard::new().is_ok();
+    #[cfg(target_family = "wasm")]
+    let clipboard_ok = false;
     let mut snapshot = DesktopActionsSnapshot {
-        clipboard_available: Clipboard::new().is_ok(),
+        clipboard_available: clipboard_ok,
+        opener_available: !cfg!(target_family = "wasm"),
+        picker_available: !cfg!(target_family = "wasm"),
         ..DesktopActionsSnapshot::default()
     };
     if !snapshot.clipboard_available {
@@ -97,15 +108,30 @@ pub fn snapshot(cx: &App) -> DesktopActionsSnapshot {
 }
 
 pub fn copy_text(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
-    let result = Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
-        .map_err(DesktopActionError::from);
-    update_result(
-        "clipboard_copy",
-        result.as_ref().err().map(|e| e.to_string()),
-        cx,
-    );
-    result
+    // Wasm: no clipboard backend (arboard) — degrade to an explicit error.
+    #[cfg(target_family = "wasm")]
+    {
+        let result = Err::<(), _>(DesktopActionError::Unavailable);
+        update_result(
+            "clipboard_copy",
+            result.as_ref().err().map(|e| e.to_string()),
+            cx,
+        );
+        let _ = text;
+        return result;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let result = Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+            .map_err(DesktopActionError::from);
+        update_result(
+            "clipboard_copy",
+            result.as_ref().err().map(|e| e.to_string()),
+            cx,
+        );
+        result
+    }
 }
 
 pub fn copy_diagnostics(cx: &mut App) -> Result<(), DesktopActionError> {
@@ -124,33 +150,81 @@ pub fn open_config_folder(cx: &mut App) -> Result<(), DesktopActionError> {
 }
 
 pub fn open_url(url: &str, cx: &mut App) -> Result<(), DesktopActionError> {
-    let result = open::that_detached(url).map_err(|source| DesktopActionError::OpenUrlFailed {
-        url: url.to_string(),
-        source,
-    });
-    update_result("open_url", result.as_ref().err().map(|e| e.to_string()), cx);
-    result
+    #[cfg(target_family = "wasm")]
+    {
+        // No `open` crate on wasm (it hits compile_error); a future web entry
+        // could use window.open here instead.
+        let result = Err(DesktopActionError::Unavailable);
+        update_result("open_url", result.as_ref().err().map(|e| e.to_string()), cx);
+        let _ = url;
+        return result;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let result = open::that_detached(url).map_err(|source| DesktopActionError::OpenUrlFailed {
+            url: url.to_string(),
+            source,
+        });
+        update_result("open_url", result.as_ref().err().map(|e| e.to_string()), cx);
+        result
+    }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn pick_file(cx: &mut App) -> Option<PathBuf> {
-    let file = rfd::FileDialog::new().pick_file();
-    tracing::info!(target: "gpui_starter::desktop_actions", file = ?file, "file picker result");
-    update_result("pick_file", None, cx);
-    file
+    pick_with_dialog("pick_file", rfd::FileDialog::new().pick_file(), cx)
 }
 
+#[cfg(target_family = "wasm")]
+pub fn pick_file(cx: &mut App) -> Option<PathBuf> {
+    pick_with_dialog("pick_file", None, cx)
+}
+
+#[cfg(not(target_family = "wasm"))]
 pub fn pick_folder(cx: &mut App) -> Option<PathBuf> {
-    let folder = rfd::FileDialog::new().pick_folder();
-    tracing::info!(target: "gpui_starter::desktop_actions", folder = ?folder, "folder picker result");
-    update_result("pick_folder", None, cx);
-    folder
+    pick_with_dialog("pick_folder", rfd::FileDialog::new().pick_folder(), cx)
 }
 
+#[cfg(target_family = "wasm")]
+pub fn pick_folder(cx: &mut App) -> Option<PathBuf> {
+    pick_with_dialog("pick_folder", None, cx)
+}
+
+#[cfg(not(target_family = "wasm"))]
 pub fn save_file(cx: &mut App) -> Option<PathBuf> {
-    let file = rfd::FileDialog::new().save_file();
-    tracing::info!(target: "gpui_starter::desktop_actions", file = ?file, "save file picker result");
-    update_result("save_file", None, cx);
-    file
+    pick_with_dialog("save_file", rfd::FileDialog::new().save_file(), cx)
+}
+
+#[cfg(target_family = "wasm")]
+pub fn save_file(cx: &mut App) -> Option<PathBuf> {
+    pick_with_dialog("save_file", None, cx)
+}
+
+/// Shared body of the file-dialog helpers.
+///
+/// Wasm: `rfd::FileDialog` does not exist on wasm32-unknown-unknown — the
+/// dialog helpers report "unavailable" and return `None`.
+fn pick_with_dialog(action: &'static str, _file: Option<PathBuf>, cx: &mut App) -> Option<PathBuf> {
+    #[cfg(target_family = "wasm")]
+    {
+        tracing::debug!(
+            target: "gpui_starter::desktop_actions",
+            action,
+            "file dialog unavailable on wasm"
+        );
+        update_result(
+            action,
+            Some("file dialog unavailable on wasm".to_string()),
+            cx,
+        );
+        return None;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        tracing::info!(target: "gpui_starter::desktop_actions", file = ?_file, "file picker result");
+        update_result(action, None, cx);
+        _file
+    }
 }
 
 pub fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
@@ -353,17 +427,33 @@ fn build_diagnostics_text(cx: &App) -> String {
 }
 
 pub fn open_path(path: PathBuf, cx: &mut App) -> Result<(), DesktopActionError> {
-    let result =
-        open::that_detached(path.as_path()).map_err(|source| DesktopActionError::OpenPathFailed {
-            path: path.display().to_string(),
-            source,
+    #[cfg(target_family = "wasm")]
+    {
+        // No `open` crate on wasm; degrade to an explicit error instead.
+        let result = Err(DesktopActionError::Unavailable);
+        update_result(
+            "open_path",
+            result.as_ref().err().map(|e| e.to_string()),
+            cx,
+        );
+        let _ = path;
+        return result;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let result = open::that_detached(path.as_path()).map_err(|source| {
+            DesktopActionError::OpenPathFailed {
+                path: path.display().to_string(),
+                source,
+            }
         });
-    update_result(
-        "open_path",
-        result.as_ref().err().map(|e| e.to_string()),
-        cx,
-    );
-    result
+        update_result(
+            "open_path",
+            result.as_ref().err().map(|e| e.to_string()),
+            cx,
+        );
+        result
+    }
 }
 
 fn update_result(action: &str, error: Option<String>, cx: &mut App) {

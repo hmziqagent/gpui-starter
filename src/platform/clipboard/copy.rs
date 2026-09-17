@@ -4,9 +4,13 @@
 //! and image content. Failures are surfaced as [`ClipboardError`] (a
 //! dedicated error variant) rather than panicking, matching the
 //! boilerplate's "return Result" convention.
+//!
+//! Wasm: `arboard` has no wasm32-unknown-unknown backend, so the write
+//! helpers degrade to explicit `AccessFailed` errors.
 
 use std::fmt;
 
+#[cfg(not(target_family = "wasm"))]
 use arboard::{Clipboard, ImageData};
 
 use super::item::ClipboardContent;
@@ -37,13 +41,20 @@ impl fmt::Display for ClipboardError {
 
 impl std::error::Error for ClipboardError {}
 
+#[cfg(not(target_family = "wasm"))]
 impl From<arboard::Error> for ClipboardError {
     fn from(err: arboard::Error) -> Self {
         Self::AccessFailed(err.to_string())
     }
 }
 
+#[cfg(target_family = "wasm")]
+fn unavailable() -> ClipboardError {
+    ClipboardError::AccessFailed("clipboard unavailable on wasm".to_string())
+}
+
 /// Write plain text to the system clipboard.
+#[cfg(not(target_family = "wasm"))]
 pub fn set_text(text: &str) -> Result<(), ClipboardError> {
     let mut clipboard =
         Clipboard::new().map_err(|err| ClipboardError::AccessFailed(err.to_string()))?;
@@ -59,6 +70,7 @@ pub fn set_text(text: &str) -> Result<(), ClipboardError> {
 /// `rgba_bytes` must be `width * height * 4` bytes long; callers are
 /// responsible for ensuring this invariant (an inconsistency surfaces as a
 /// [`ClipboardError::WriteFailed`]).
+#[cfg(not(target_family = "wasm"))]
 pub fn set_image(width: usize, height: usize, rgba_bytes: &[u8]) -> Result<(), ClipboardError> {
     let mut clipboard =
         Clipboard::new().map_err(|err| ClipboardError::AccessFailed(err.to_string()))?;
@@ -76,6 +88,20 @@ pub fn set_image(width: usize, height: usize, rgba_bytes: &[u8]) -> Result<(), C
         "wrote image to clipboard"
     );
     Ok(())
+}
+
+/// Wasm: no clipboard backend exists — degrade to an explicit error.
+#[cfg(target_family = "wasm")]
+pub fn set_text(_text: &str) -> Result<(), ClipboardError> {
+    tracing::debug!(target: LOG, "clipboard write skipped on wasm");
+    Err(unavailable())
+}
+
+/// Wasm: no clipboard backend exists — degrade to an explicit error.
+#[cfg(target_family = "wasm")]
+pub fn set_image(_width: usize, _height: usize, _rgba_bytes: &[u8]) -> Result<(), ClipboardError> {
+    tracing::debug!(target: LOG, "clipboard image write skipped on wasm");
+    Err(unavailable())
 }
 
 /// Write arbitrary [`ClipboardContent`] to the clipboard.
@@ -105,6 +131,7 @@ mod tests {
         assert!(err.to_string().contains("nope"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
     fn arboard_error_converts() {
         let err = ClipboardError::from(arboard::Error::ContentNotAvailable);

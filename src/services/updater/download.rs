@@ -1,8 +1,14 @@
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::types::*;
-use gpui::{App, AsyncApp, UpdateGlobal as _};
+use gpui::App;
+#[cfg(not(target_family = "wasm"))]
+use gpui::AsyncApp;
+#[cfg(not(target_family = "wasm"))]
+use gpui::UpdateGlobal as _;
 
 // ---------------------------------------------------------------------------
 // Download update
@@ -22,17 +28,35 @@ pub fn download_update(cx: &mut App) {
         }
     };
 
+    // Wasm: downloads can never be Available (check_for_updates reports
+    // UpToDate on wasm), and there is no binary to swap — degrade to a no-op
+    // rather than touching the (undriven) tokio runtime.
+    #[cfg(target_family = "wasm")]
+    {
+        tracing::debug!(
+            target: "gpui_starter::updater",
+            version = %version,
+            "download requested on wasm; updates are desktop-only"
+        );
+        let _ = version;
+        return;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     super::set_status(UpdateStatus::Downloading { progress: 0 }, cx);
 
+    #[cfg(not(target_family = "wasm"))]
     let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
         .expect("tokio runtime global must be installed before downloading updates");
     // P8: Reuse the asset cached by the most recent `check_for_updates` run
     // so we can skip a second manifest fetch.
+    #[cfg(not(target_family = "wasm"))]
     let cached_asset = current.cached_asset.clone();
 
     // A4: thin spawn wrapper that delegates to `run_download` and routes the
     // recoverable error path to `handle_download_failure`. The actual
     // download/verify logic lives in `run_download`, which is unit-testable.
+    #[cfg(not(target_family = "wasm"))]
     cx.spawn(async move |cx| {
         match run_download(version, cached_asset, rt, client, cx).await {
             Ok(DownloadOutcome::Success { version, path }) => {
@@ -69,6 +93,7 @@ pub fn download_update(cx: &mut App) {
 /// to `handle_download_failure` for retry/backoff. `PermanentFailure` covers
 /// signature/codesign mismatches that must not be retried. `Success` carries
 /// the downloaded file path for the wrapper to record.
+#[cfg(not(target_family = "wasm"))]
 enum DownloadOutcome {
     Success { version: String, path: String },
     PermanentFailure(String),
@@ -83,6 +108,7 @@ enum DownloadOutcome {
 /// Recoverable failures are returned as `Err` so the caller can apply retry
 /// backoff via `handle_download_failure`; verification failures are returned
 /// as `Ok(PermanentFailure(..))` to suppress retry.
+#[cfg(not(target_family = "wasm"))]
 async fn run_download(
     version: String,
     cached_asset: Option<PlatformAsset>,
@@ -335,6 +361,7 @@ async fn run_download(
 /// interim status: `Available` when a retry is pending (so the UI can
 /// re-attempt), or a terminal `Error` (plus notification) when retries are
 /// exhausted.
+#[cfg(not(target_family = "wasm"))]
 fn handle_download_failure(error: String, cx: &mut App) {
     let scheduled = super::check::schedule_retry(
         cx,
@@ -372,6 +399,7 @@ fn handle_download_failure(error: String, cx: &mut App) {
 ///
 /// This helper is synchronous and intended to be dispatched on the background
 /// executor — see [`run_download`] Step 3.
+#[cfg(not(target_family = "wasm"))]
 fn verify_ed25519_signature(
     file_path: &std::path::Path,
     signature_b64: &str,

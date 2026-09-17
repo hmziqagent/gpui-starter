@@ -1,3 +1,4 @@
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 use super::types::*;
@@ -34,17 +35,35 @@ pub fn check_for_updates(cx: &mut App) {
         return;
     }
 
+    // Wasm: self-update is a desktop-only concept (binary swap on disk).
+    // Resolve every check to UpToDate instead of fetching a manifest.
+    #[cfg(target_family = "wasm")]
+    {
+        tracing::debug!(
+            target: "gpui_starter::updater",
+            "update check skipped on wasm; reporting up-to-date"
+        );
+        super::reset_check_retry(cx);
+        super::set_status(UpdateStatus::UpToDate, cx);
+        return;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     super::set_status(UpdateStatus::Checking, cx);
 
+    #[cfg(not(target_family = "wasm"))]
     let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
         .expect("tokio runtime global must be installed before checking for updates");
+    #[cfg(not(target_family = "wasm"))]
     let current_version = current.current_version.clone();
 
     // P8: If we already hold a manifest cached from a recent check, reuse it
     // instead of hitting the network again. "Recent" = within one periodic
     // check interval (PERIODIC_CHECK_INTERVAL_SECS), matching the staleness
     // horizon used by the periodic re-check loop in `mod.rs`.
+    #[cfg(not(target_family = "wasm"))]
     let cached_manifest = current.cached_manifest.clone();
+    #[cfg(not(target_family = "wasm"))]
     let cache_fresh = cached_manifest.is_some()
         && current
             .last_check
@@ -57,6 +76,7 @@ pub fn check_for_updates(cx: &mut App) {
             })
             .unwrap_or(false);
 
+    #[cfg(not(target_family = "wasm"))]
     cx.spawn(async move |cx| {
         let manifest_result: Result<UpdateManifest, String> = if cache_fresh {
             // cache_fresh is only true when cached_manifest is Some.
@@ -250,6 +270,7 @@ fn handle_check_failure(error: String, cx: &mut App) {
 /// (GET → timeout → status check → bytes → `serde_json`). Callers that also
 /// need a platform asset should use [`fetch_platform_asset`], which delegates
 /// here and then resolves the platform key.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) async fn fetch_manifest(
     rt: Arc<tokio::runtime::Runtime>,
     client: reqwest::Client,
@@ -279,6 +300,7 @@ pub(crate) async fn fetch_manifest(
         .map_err(|e| format!("failed to parse manifest: {e}"))
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) async fn fetch_platform_asset(
     rt: Arc<tokio::runtime::Runtime>,
     client: reqwest::Client,

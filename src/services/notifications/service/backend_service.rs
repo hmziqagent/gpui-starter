@@ -4,12 +4,17 @@ use std::sync::Arc;
 use futures_util::FutureExt;
 use gpui::{Global, SharedString};
 
+#[cfg(target_family = "wasm")]
+use super::NotificationBackend;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::UserNotifyBackend;
+#[cfg(target_family = "wasm")]
+use super::WasmStubBackend;
 use super::types::{
     NotificationBackendKind, NotificationCapabilities, NotificationImportance,
     NotificationPermissionState, NotificationRequest, NotificationSendResult,
 };
+#[cfg(not(target_family = "wasm"))]
 use super::{NotificationBackend, NotifyRustBackend};
 
 pub const LOG: &str = "gpui_starter::notifications";
@@ -59,7 +64,12 @@ pub struct NotificationService {
 impl NotificationService {
     pub fn new() -> Self {
         tracing::info!(target: LOG, "initializing native notification service");
+        #[cfg(not(target_family = "wasm"))]
         let secondary = Arc::new(NotifyRustBackend::new()) as Arc<dyn NotificationBackend>;
+        // Wasm: no OS notification daemons exist — a failing stub backend
+        // keeps the primary/secondary shape and degrades to in-app policy.
+        #[cfg(target_family = "wasm")]
+        let secondary = Arc::new(WasmStubBackend::new()) as Arc<dyn NotificationBackend>;
         let (primary, primary_error) = select_primary_backend();
         Self::with_backends(primary, secondary, primary_error)
     }
@@ -93,7 +103,12 @@ impl NotificationService {
         self.primary
             .as_ref()
             .map(|backend| backend.kind())
-            .unwrap_or(NotificationBackendKind::NotifyRust)
+            // On wasm the secondary is the UiOnly stub, not notify-rust.
+            .unwrap_or(if cfg!(target_family = "wasm") {
+                NotificationBackendKind::UiOnly
+            } else {
+                NotificationBackendKind::NotifyRust
+            })
     }
 
     pub(super) fn active_capabilities(&self) -> NotificationCapabilities {

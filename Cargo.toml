@@ -147,7 +147,6 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-appender = "0.2"
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
@@ -201,8 +200,6 @@ opentelemetry_sdk = { version = "0.24.1", optional = true, features = [
     "rt-tokio",
     "trace",
 ] }
-open = "5.3.2"
-arboard = { version = "3.6.1", features = ["image-data"] }
 rfd = "0.15.4"
 notify = "8.2.0"
 undo = "0.52.0"
@@ -257,6 +254,16 @@ keyring = { version = "3.6.3", features = ["apple-native"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 notify-rust = "4.17.0"
 user-notify = "0.4.2"
+# `open` hits compile_error!("open is not supported on this platform") and
+# `arboard` has no wasm clipboard backend (its `platform` module is
+# linux/osx/windows only) — both hard-fail on wasm32-unknown-unknown
+# (discovered during area 2's wasm check; same class as the dep gates above).
+open = "5.3.2"
+arboard = { version = "3.6.1", features = ["image-data"] }
+# File appender uses symlink APIs with no wasm32-unknown-unknown story;
+# wasm logs to the console (browser devtools) instead — see
+# src/services/logging.rs.
+tracing-appender = "0.2"
 # Native-only tokio features re-added on top of the workspace base
 # (rt + sync + time): `net` and `io-util` have no wasm implementation.
 tokio = { workspace = true, features = ["io-util", "net"] }

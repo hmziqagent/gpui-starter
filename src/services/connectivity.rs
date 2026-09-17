@@ -1,4 +1,5 @@
 use gpui::{App, BorrowAppContext as _, Global};
+#[cfg(not(target_family = "wasm"))]
 use network_interface::NetworkInterfaceConfig;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +42,9 @@ pub fn snapshot(cx: &App) -> ConnectivitySnapshot {
         .unwrap_or_default()
 }
 
+/// Native: HTTP probe via the shared tokio runtime + interface enumeration on
+/// a blocking thread.
+#[cfg(not(target_family = "wasm"))]
 pub fn check_now(cx: &mut App) {
     let probe_url = snapshot(cx).probe_url;
     let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
@@ -106,6 +110,7 @@ pub fn check_now(cx: &mut App) {
     .detach();
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn read_interfaces() -> Vec<String> {
     network_interface::NetworkInterface::show()
         .map(|ifaces| {
@@ -115,4 +120,20 @@ fn read_interfaces() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Wasm: no interface enumeration (no `network-interface` on wasm32) and the
+/// browser mediates all network access — assume the app is online and skip
+/// the probe.
+#[cfg(target_family = "wasm")]
+pub fn check_now(cx: &mut App) {
+    cx.update_global::<ConnectivitySnapshot, _>(|next, _cx| {
+        next.state = ConnectivityState::Online;
+        next.interfaces = Vec::new();
+        next.last_error = None;
+    });
+    tracing::debug!(
+        target: "gpui_starter::connectivity",
+        "connectivity probe skipped on wasm; assuming online"
+    );
 }

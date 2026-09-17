@@ -42,6 +42,8 @@ pub use features::command_palette as launcher;
 pub use features::pages as views;
 pub use foundation::validation as input_validation;
 pub use foundation::{errors, ids, time};
+// SQLite migrations are native-only (no rusqlite on wasm).
+#[cfg(not(target_family = "wasm"))]
 pub use persistence::sqlite::db_migrations;
 #[cfg(target_os = "macos")]
 pub use platform::desktop_shell::tray;
