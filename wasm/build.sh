@@ -11,6 +11,8 @@
 #
 # The wasm-bindgen CLI version MUST match the crate's wasm-bindgen pin
 # (=0.2.125 in Cargo.toml) or the post-process fails with schema errors.
+# Both profiles finish by writing wasm/pkg/version.json with a null
+# version (200 for the harness boot probe, SW stays in dev no-op).
 # Acquire the pinned CLI from GitHub release assets:
 #   https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.125/ \
 #     wasm-bindgen-0.2.125-x86_64-unknown-linux-musl.tar.gz
@@ -100,6 +102,20 @@ if [[ "${PROFILE_DIR}" == "release" ]]; then
         echo "    install: see the binaryen URL in this script's header" >&2
     fi
 fi
+
+# version.json: the harness boot probe (index.html) and sw.js's update
+# check both GET /pkg/version.json — write it on EVERY build so plain
+# debug runs no longer log a 404 to the console. `version` stays null
+# here ON PURPOSE: serve_http.py injects any non-null version into
+# sw.js's BUILD_VERSION, flipping the SW out of its deliberate dev
+# no-op (see the sw.js header — cache-first /pkg/* on a ~95 MB debug
+# artifact would shadow live rebuilds). `just wasm-release` /
+# precompress.mjs overwrites this file with the real content hash once
+# the release artifacts + compressed siblings are final.
+printf '{"version":null,"generated":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > wasm/pkg/version.json
+echo "==> wrote wasm/pkg/version.json (version: null — dev no-op SW)"
+echo "    precompress (release flow) replaces it with the real content hash"
 
 echo "==> done: wasm/pkg/gpui_starter.js + wasm/pkg/gpui_starter_bg.wasm"
 if [[ "${PROFILE_DIR}" == "release" ]]; then

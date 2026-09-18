@@ -9,13 +9,15 @@
  *   wasm/pkg/gpui_starter_bg.wasm  -> .gz + .br
  *   wasm/pkg/gpui_starter.js       -> .gz + .br
  *   wasm/index.html                -> .gz + .br
+ *   wasm/sqlite/{worker,sqlite3,sqlite3-opfs-async-proxy}.js/.wasm
  * (sw.js is deliberately NOT compressed: serve_http.py injects the build
  * version into its text on every request.)
  *
  * Also writes wasm/pkg/version.json — a sha256 digest over the served files
- * (index.html, manifest, icons, pkg JS + wasm). serve_http.py injects that
- * version into sw.js so a changed build changes the SW's bytes, which is
- * what drives the browser update cycle and the "reload" toast.
+ * (index.html, manifest, icons, pkg JS + wasm, vendored sqlite engine) —
+ * overwriting the null-version placeholder build.sh left there. serve_http.py
+ * injects that version into sw.js so a changed build changes the SW's bytes,
+ * which is what drives the browser update cycle and the "reload" toast.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -31,7 +33,17 @@ const GZIP_LEVEL = FAST ? 6 : 9;
 const BROTLI_QUALITY = FAST ? 5 : 11;
 
 /** Files that get .gz/.br siblings (server picks by Accept-Encoding). */
-const COMPRESS = ["pkg/gpui_starter_bg.wasm", "pkg/gpui_starter.js", "index.html"];
+const COMPRESS = [
+  "pkg/gpui_starter_bg.wasm",
+  "pkg/gpui_starter.js",
+  "index.html",
+  // Vendored sqlite-wasm engine + storage worker (area D): the raw
+  // engine is ~855 KB; on the wire brotli cuts it to ~250 KB.
+  "sqlite/worker.js",
+  "sqlite/sqlite3.js",
+  "sqlite/sqlite3.wasm",
+  "sqlite/sqlite3-opfs-async-proxy.js",
+];
 
 /** Files whose content defines the build version (hash input). */
 const VERSION_INPUTS = [
@@ -43,6 +55,13 @@ const VERSION_INPUTS = [
   "icons/icon-512-maskable.png",
   "pkg/gpui_starter.js",
   "pkg/gpui_starter_bg.wasm",
+  // The sqlite engine/worker are served (runtime-cached by the SW), so
+  // an engine upgrade must bump the version or deploys stop
+  // invalidating the cache (area D interface note).
+  "sqlite/worker.js",
+  "sqlite/sqlite3.js",
+  "sqlite/sqlite3.wasm",
+  "sqlite/sqlite3-opfs-async-proxy.js",
 ];
 
 const fmt = (n) => (n / 1024 / 1024).toFixed(2).padStart(8) + " MB";
