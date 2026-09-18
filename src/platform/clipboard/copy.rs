@@ -5,8 +5,10 @@
 //! dedicated error variant) rather than panicking, matching the
 //! boilerplate's "return Result" convention.
 //!
-//! Wasm: `arboard` has no wasm32-unknown-unknown backend, so the write
-//! helpers degrade to explicit `AccessFailed` errors.
+//! Wasm: `arboard` has no wasm32-unknown-unknown backend, so text writes go
+//! through `navigator.clipboard.writeText` instead (fire-and-forget — see
+//! [`crate::platform::web::clipboard`]); image writes degrade to an explicit
+//! error.
 
 use std::fmt;
 
@@ -50,7 +52,7 @@ impl From<arboard::Error> for ClipboardError {
 
 #[cfg(target_family = "wasm")]
 fn unavailable() -> ClipboardError {
-    ClipboardError::AccessFailed("clipboard unavailable on wasm".to_string())
+    ClipboardError::AccessFailed("clipboard image write unsupported on wasm".to_string())
 }
 
 /// Write plain text to the system clipboard.
@@ -90,14 +92,20 @@ pub fn set_image(width: usize, height: usize, rgba_bytes: &[u8]) -> Result<(), C
     Ok(())
 }
 
-/// Wasm: no clipboard backend exists — degrade to an explicit error.
+/// Wasm: `arboard` has no browser backend — write text through the async
+/// `navigator.clipboard.writeText` API instead. The sync `-> Result` shape
+/// cannot observe the Promise, so the write is fire-and-forget: rejections
+/// are logged (tracing) by the bridge and `Ok` is returned immediately.
 #[cfg(target_family = "wasm")]
-pub fn set_text(_text: &str) -> Result<(), ClipboardError> {
-    tracing::debug!(target: LOG, "clipboard write skipped on wasm");
-    Err(unavailable())
+pub fn set_text(text: &str) -> Result<(), ClipboardError> {
+    crate::platform::web::clipboard::write_text_fire_and_forget(text);
+    tracing::debug!(target: LOG, len = text.len(), "clipboard text write dispatched on wasm");
+    Ok(())
 }
 
-/// Wasm: no clipboard backend exists — degrade to an explicit error.
+/// Wasm: `navigator.clipboard.write(ClipboardItem)` is PNG +
+/// secure-context-only with no raw-RGB path — image writes degrade to an
+/// explicit error (parity with the arboard-less stub it replaces).
 #[cfg(target_family = "wasm")]
 pub fn set_image(_width: usize, _height: usize, _rgba_bytes: &[u8]) -> Result<(), ClipboardError> {
     tracing::debug!(target: LOG, "clipboard image write skipped on wasm");

@@ -71,13 +71,15 @@ struct DesktopActionsInner {
 impl Global for DesktopActionsState {}
 
 pub fn initialize(cx: &mut App) {
-    // arboard (clipboard) has no wasm backend; rfd's FileDialog and the
-    // `open` crate are compiled out on wasm too — report those as
-    // unavailable, keep the (never-firing) notify watchers working.
+    // arboard (clipboard) has no wasm backend — on wasm the async
+    // `navigator.clipboard` API is used instead (fire-and-forget; see
+    // src/platform/web/clipboard.rs); rfd's FileDialog and the `open` crate
+    // are compiled out on wasm — report those as unavailable, keep the
+    // (never-firing) notify watchers working.
     #[cfg(not(target_family = "wasm"))]
     let clipboard_ok = Clipboard::new().is_ok();
     #[cfg(target_family = "wasm")]
-    let clipboard_ok = false;
+    let clipboard_ok = crate::platform::web::clipboard::is_available();
     let mut snapshot = DesktopActionsSnapshot {
         clipboard_available: clipboard_ok,
         opener_available: !cfg!(target_family = "wasm"),
@@ -108,17 +110,15 @@ pub fn snapshot(cx: &App) -> DesktopActionsSnapshot {
 }
 
 pub fn copy_text(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
-    // Wasm: no clipboard backend (arboard) — degrade to an explicit error.
+    // Wasm: arboard has no browser backend — write through the async
+    // `navigator.clipboard.writeText` API instead. The Promise result cannot
+    // be observed from this sync signature, so the write is fire-and-forget
+    // (rejections are logged by the bridge) and success is reported eagerly.
     #[cfg(target_family = "wasm")]
     {
-        let result = Err::<(), _>(DesktopActionError::Unavailable);
-        update_result(
-            "clipboard_copy",
-            result.as_ref().err().map(|e| e.to_string()),
-            cx,
-        );
-        let _ = text;
-        return result;
+        crate::platform::web::clipboard::write_text_fire_and_forget(text);
+        update_result("clipboard_copy", None, cx);
+        return Ok(());
     }
     #[cfg(not(target_family = "wasm"))]
     {

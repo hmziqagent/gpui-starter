@@ -3967,6 +3967,7 @@ dependencies = [
  "gpui-query",
  "insta",
  "interprocess",
+ "js-sys",
  "keyring",
  "koruma",
  "koruma-collection",
@@ -4014,6 +4015,7 @@ dependencies = [
  "wasm-bindgen",
  "wayland-client",
  "wayland-protocols-wlr",
+ "web-sys",
  "web-time",
 ]
 

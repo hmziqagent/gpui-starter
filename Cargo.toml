@@ -285,6 +285,51 @@ web-time = "1.1.0"
 # js-sys and wasm-bindgen are already locked). Feature union applies on wasm
 # only — native keeps the default clock.
 chrono = { version = "0.4", features = ["wasmbind"] }
+# Browser API surface for the wasm integration bridges (src/platform/web/):
+# clipboard (navigator.clipboard), hash deep links (location/history),
+# favicon+title (canvas/link), and connectivity (online/offline events).
+# Version-pinned to the pair already locked through the gpui web stack so the
+# feature flags resolve against the SAME web-sys build (no duplicate compile).
+# The feature set is the UNION of every wasm area's needs:
+#   - B (this crate, browser integrations): Clipboard, Window, Navigator,
+#     Location, History, Document, HtmlHeadElement, HtmlLinkElement,
+#     HtmlCanvasElement, CanvasRenderingContext2d, Event, EventTarget,
+#     AddEventListenerOptions
+#   - C (web notifications): Notification, NotificationOptions,
+#     NotificationDirection
+#   - D (SQLite-on-OPFS worker): Worker, WorkerOptions, MessageEvent,
+#     MessagePort, Storage, StorageManager, Blob, Url
+# (Document/Html* transitively enable Element/Node; Window/Clipboard/Node
+# transitively enable EventTarget.)
+web-sys = { version = "=0.3.102", features = [
+    "AddEventListenerOptions",
+    "Blob",
+    "CanvasRenderingContext2d",
+    "Clipboard",
+    "Document",
+    "Event",
+    "EventTarget",
+    "History",
+    "HtmlCanvasElement",
+    "HtmlHeadElement",
+    "HtmlLinkElement",
+    "Location",
+    "MessageEvent",
+    "MessagePort",
+    "Navigator",
+    "Notification",
+    "NotificationDirection",
+    "NotificationOptions",
+    "Storage",
+    "StorageManager",
+    "Url",
+    "Window",
+    "Worker",
+    "WorkerOptions",
+] }
+# Promise/Reflect/JsValue interop for the fire-and-forget clipboard write and
+# the DOM event closures. Exact pin: matches the locked wasm-bindgen =0.2.125.
+js-sys = "=0.3.102"
 
 [build-dependencies]
 es-fluent-build.workspace = true
@@ -294,6 +339,12 @@ es-fluent-build.workspace = true
 codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
+
+# Wasm release builds: thin LTO shrinks the (post-wasm-opt) binary noticeably
+# at a modest link-time cost — the wasm release flow (`just wasm-release`) is
+# the main consumer. Native release builds benefit equally.
+[profile.release]
+lto = "thin"
 
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }

@@ -88,3 +88,110 @@ fn validate_path_segment_helper() {
     assert!(validate_path_segment("foo/../bar").is_err());
     assert!(validate_path_segment("seg\x00ment").is_err());
 }
+
+// --- Hash deep-link tests (web location.hash <-> AppRoute) ---------------
+
+/// `to_hash` must cover EVERY page (exhaustive over `Page::all`), plus the
+/// settings sub-route — a new Page variant fails here until it is added.
+#[test]
+fn to_hash_round_trips_every_page() {
+    for page in Page::all() {
+        let route = AppRoute::Page(*page);
+        let hash = route.to_hash();
+        assert!(
+            hash.starts_with("#/"),
+            "hash must be #-prefixed with a leading slash: {hash}"
+        );
+        assert_eq!(AppRoute::from_hash(&hash).unwrap(), route, "page {page:?}");
+    }
+    let route = AppRoute::SettingsNotifications;
+    assert_eq!(route.to_hash(), "#/settings/notifications");
+    assert_eq!(
+        AppRoute::from_hash(&route.to_hash()).unwrap(),
+        AppRoute::SettingsNotifications
+    );
+}
+
+#[test]
+fn from_hash_matches_to_hash_for_every_valid_host() {
+    for host in VALID_HOSTS {
+        let route = AppRoute::parse_deep_link(&format!("{}://{}", APP_URL_SCHEME, host)).unwrap();
+        assert_eq!(AppRoute::from_hash(&route.to_hash()).unwrap(), route);
+    }
+}
+
+#[test]
+fn parses_hash_deep_links() {
+    assert_eq!(
+        AppRoute::from_hash("#/home").unwrap(),
+        AppRoute::Page(Page::Home)
+    );
+    assert_eq!(
+        AppRoute::from_hash("#/settings").unwrap(),
+        AppRoute::Page(Page::Settings)
+    );
+    assert_eq!(
+        AppRoute::from_hash("#/settings/notifications").unwrap(),
+        AppRoute::SettingsNotifications
+    );
+    assert_eq!(
+        AppRoute::from_hash("#/diagnostics").unwrap(),
+        AppRoute::Page(Page::Diagnostics)
+    );
+    // Leading `#` optional (lenient for stripped inputs).
+    assert_eq!(
+        AppRoute::from_hash("/home").unwrap(),
+        AppRoute::Page(Page::Home)
+    );
+}
+
+#[test]
+fn empty_hash_resolves_to_default_route() {
+    assert_eq!(AppRoute::from_hash("").unwrap(), AppRoute::default());
+    assert_eq!(AppRoute::from_hash("#").unwrap(), AppRoute::default());
+    assert_eq!(AppRoute::from_hash("#/").unwrap(), AppRoute::default());
+    assert_eq!(AppRoute::from_hash("  #  ").unwrap(), AppRoute::default());
+}
+
+#[test]
+fn from_hash_rejects_unknown_and_unsafe_hashes() {
+    // Unknown host (same rejection as parse_deep_link).
+    assert!(AppRoute::from_hash("#/missing").is_err());
+    // Encoded path traversal survives URL parsing and is rejected by the
+    // deep-link validator (same input the parse_deep_link tests use).
+    assert!(AppRoute::from_hash("#/settings/..%2Fetc").is_err());
+    // Null bytes in segments reach the validator too.
+    assert!(AppRoute::from_hash("#/settings/\0notifications").is_err());
+    // Deep sub-paths have no route mapping.
+    assert!(AppRoute::from_hash("#/home/extra/segments").is_err());
+    // A foreign scheme must never parse as a hash route.
+    assert!(AppRoute::from_hash("https://example.com").is_err());
+}
+
+#[test]
+fn from_hash_neutralizes_plain_dot_segments_via_url_parsing() {
+    // Plain `..` is normalized away by the `url` crate DURING parsing
+    // (dot-segment removal), so it never reaches the traversal validator —
+    // it resolves to the parent route instead. Locking that in: the outcome
+    // is safe either way, but it must stay deterministic.
+    assert_eq!(
+        AppRoute::from_hash("#/settings/..").unwrap(),
+        AppRoute::Page(Page::Settings)
+    );
+}
+
+#[test]
+fn hash_and_url_forms_agree_on_the_route_set() {
+    // Whatever to_url accepts, to_hash mirrors (scheme stripped, `#` added).
+    for page in Page::all() {
+        let route = AppRoute::Page(*page);
+        let url = route.to_url();
+        let expected_hash = format!("#/{}", url.trim_start_matches("gpui-starter://"));
+        assert_eq!(route.to_hash(), expected_hash);
+    }
+    let route = AppRoute::SettingsNotifications;
+    assert_eq!(
+        route.to_hash(),
+        format!("#/{}", route.to_url().trim_start_matches("gpui-starter://"))
+    );
+}

@@ -240,6 +240,13 @@ impl AppRoot {
         self.active_route = route.clone();
         self.render_error = false;
         self.error_page = None;
+        // Wasm: mirror the navigation into location.hash so the URL stays
+        // bookmarkable and Back steps through in-app navigation. Boot and
+        // back/forward movement use replaceState/no-op inside the router
+        // bridge (src/platform/web/router.rs); pushing here only fires on
+        // genuine in-app navigation.
+        #[cfg(target_family = "wasm")]
+        crate::platform::web::router::push_route_hash(&route);
         crate::app_state::update_config(cx, |config| {
             config.active_route = route;
         });

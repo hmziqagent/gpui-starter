@@ -122,18 +122,29 @@ fn read_interfaces() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Wasm: no interface enumeration (no `network-interface` on wasm32) and the
-/// browser mediates all network access — assume the app is online and skip
-/// the probe.
+/// Wasm: the browser's reachability signal is `navigator.onLine` (+ the
+/// online/offline listeners installed by `platform::web` at app init — see
+/// `src/platform/web/connectivity.rs`). No interface enumeration exists on
+/// the web platform, so `interfaces` stays empty.
 #[cfg(target_family = "wasm")]
 pub fn check_now(cx: &mut App) {
+    let online = crate::platform::web::connectivity::navigator_online();
     cx.update_global::<ConnectivitySnapshot, _>(|next, _cx| {
-        next.state = ConnectivityState::Online;
+        next.state = if online {
+            ConnectivityState::Online
+        } else {
+            ConnectivityState::Offline
+        };
         next.interfaces = Vec::new();
-        next.last_error = None;
+        next.last_error = if online {
+            None
+        } else {
+            Some("browser reports navigator.onLine = false".to_string())
+        };
     });
-    tracing::debug!(
+    tracing::info!(
         target: "gpui_starter::connectivity",
-        "connectivity probe skipped on wasm; assuming online"
+        online,
+        "connectivity snapshot updated from navigator.onLine"
     );
 }

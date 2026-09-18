@@ -276,6 +276,15 @@ pub fn init(cx: &mut App) {
     crate::services::updater::initialize(cx);
     crate::services::updater::check_pending_swap(cx);
 
+    // Wasm: browser integration bridges — hash deep links (router +
+    // history), the favicon/document.title tray-equivalent, and the
+    // navigator.onLine connectivity listeners. Installs after the observed
+    // globals (inbox, connectivity, config) exist; native builds skip it.
+    #[cfg(target_family = "wasm")]
+    startup_step!(cx, "web_integrations", {
+        crate::platform::web::install(cx);
+    });
+
     // Key bindings
     cx.bind_keys([
         KeyBinding::new("cmd-k", ToggleSearch, None),

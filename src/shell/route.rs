@@ -103,6 +103,38 @@ impl AppRoute {
         }
     }
 
+    /// Hash-URL form for the web (`#/settings`): the same host/segment
+    /// layout as [`AppRoute::to_url`] minus the scheme, behind a `#` so it
+    /// works as a `location.hash` deep link. Pure function — runs on every
+    /// target; only the wasm router (`src/platform/web/router.rs`) feeds it
+    /// to the History API.
+    pub fn to_hash(&self) -> String {
+        match self {
+            Self::Page(page) => format!("#/{}", page.host()),
+            Self::SettingsNotifications => format!("#/{}/notifications", Page::Settings.host()),
+        }
+    }
+
+    /// Parse a `location.hash` fragment (`#/settings`,
+    /// `#/settings/notifications`) into a route.
+    ///
+    /// Accepts an optional leading `#` and an empty path (empty / `#` /
+    /// `#/` all resolve to [`AppRoute::default`], so a bare page load never
+    /// fails route resolution). Everything else goes through the SAME
+    /// validation as [`AppRoute::parse_deep_link`] — the hash path is lifted
+    /// into the `gpui-starter://` scheme so there is exactly one parser and
+    /// one set of rejected inputs (unknown hosts, traversal, control
+    /// characters, …).
+    pub fn from_hash(hash: &str) -> Result<Self, AppError> {
+        let trimmed = hash.trim();
+        let path = trimmed.strip_prefix('#').unwrap_or(trimmed);
+        if path.is_empty() || path == "/" {
+            return Ok(Self::default());
+        }
+        let url = format!("{}://{}", APP_URL_SCHEME, path.trim_start_matches('/'));
+        Self::parse_deep_link(&url)
+    }
+
     pub fn parse_deep_link(input: &str) -> Result<Self, AppError> {
         // --- 1. Parse the raw URL -------------------------------------------
         let url =
