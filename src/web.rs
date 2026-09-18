@@ -14,6 +14,8 @@
 //! the web (storage, keyring, tray, single-instance lock, …) degrade via
 //! their wasm stubs and report unsupported capabilities.
 
+use gpui::App;
+
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -32,9 +34,21 @@ pub fn bootstrap() {
     let startup_runtime = preflight.runtime;
     let startup_deep_link = preflight.initial_deep_link;
 
+    // Native: default platform application.
+    #[cfg(not(target_family = "wasm"))]
     let app_runtime =
         gpui_platform::application().with_assets(crate::app::assets::CombinedAssets::new());
-    app_runtime.run(move |cx| {
+
+    // Wasm: force the WebGL2 backend. The default `Auto` preference selects
+    // WebGPU, whose device is unstable in software-rasterized/headless
+    // environments (wgpu reports `device lost: external Instance reference
+    // no longer exists` and rendering stops on a blank canvas); wgpu's
+    // WebGL2 backend renders identically and is stable everywhere.
+    #[cfg(target_family = "wasm")]
+    let app_runtime =
+        gpui_platform::application_with_web_backend(gpui_platform::WebBackendPreference::WebGl)
+            .with_assets(crate::app::assets::CombinedAssets::new());
+    let launch = move |cx: &mut App| {
         crate::app::init(cx);
         if let Some(runtime) = startup_runtime {
             crate::single_instance::install(runtime, cx);
@@ -48,7 +62,21 @@ pub fn bootstrap() {
 
         cx.activate(true);
         crate::app::create_new_window("My App", cx);
-    });
+    };
+
+    // Native: `Platform::run` blocks for the whole app lifetime (platform
+    // event loop), so the stack frame keeps the App alive.
+    #[cfg(not(target_family = "wasm"))]
+    app_runtime.run(launch);
+
+    // Wasm: `WebPlatform::run` invokes the launch closure and returns
+    // immediately (the run loop belongs to the browser). `run()` would then
+    // drop the last strong App reference before any spawned task can run
+    // ("app was released before async operation completed"). `run_embedded`
+    // returns an `ApplicationHandle` that owns the App; intentionally leak it
+    // so the app lives for the lifetime of the page.
+    #[cfg(target_family = "wasm")]
+    std::mem::forget(app_runtime.run_embedded(launch));
 
     // After GPUI has fully shut down (the run closure returned), re-exec the
     // binary only when a restart was requested. exec_reload() never returns on

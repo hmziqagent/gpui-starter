@@ -94,6 +94,26 @@
       });
     })();
   </script>
+  <script>
+    // WebGL screenshot fidelity: without `preserveDrawingBuffer` the browser
+    // invalidates the drawing buffer after compositing, and headless
+    // (software-rasterized) capture pipelines photograph the gpui canvas as
+    // a blank rectangle even while the app renders correctly on screen. The
+    // app renders via wgpu's WebGL2 backend, so force the flag for every
+    // webgl/webgl2 context created on this page. Minor perf cost, exact
+    // pixels for screenshots/CI — the right trade for a dev harness.
+    (function () {
+      var orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, opts) {
+        if (type === "webgl" || type === "webgl2") {
+          return orig.call(this, type, Object.assign({}, opts || {}, {
+            preserveDrawingBuffer: true,
+          }));
+        }
+        return orig.call(this, type, opts);
+      };
+    })();
+  </script>
 </head>
 <body>
   <div id="loading">

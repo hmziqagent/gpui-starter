@@ -274,6 +274,17 @@ tokio = { workspace = true, features = ["io-util", "net"] }
 # stack (gpui-pre-web), and the wasm-bindgen CLI version used by the web
 # harness MUST match the crate version — keep both at 0.2.125.
 wasm-bindgen = "=0.2.125"
+# std::time::{Instant, SystemTime} COMPILE on wasm32-unknown-unknown but PANIC
+# at runtime ("time not implemented on this platform"). The gpui web stack
+# routes its clocks through web-time (browser performance.now()/Date); the app
+# boot/render paths do the same via src/platform/clock.rs. Version = the one
+# already locked through gpui-pre-web.
+web-time = "1.1.0"
+# chrono's default clock reads std SystemTime and has the same wasm runtime
+# panic; the `wasmbind` feature swaps chrono::Utc::now() to js_sys::Date (both
+# js-sys and wasm-bindgen are already locked). Feature union applies on wasm
+# only — native keeps the default clock.
+chrono = { version = "0.4", features = ["wasmbind"] }
 
 [build-dependencies]
 es-fluent-build.workspace = true

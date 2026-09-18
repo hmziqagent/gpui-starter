@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[cfg(not(target_family = "wasm"))]
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -227,12 +228,21 @@ pub fn install_panic_hook() {
 // Crash marker (file-based crash detection)
 // ---------------------------------------------------------------------------
 
+// The crash marker trio is file-based crash detection. On wasm the whole
+// feature is native-only: `std::env::temp_dir()` (and every other
+// filesystem-path API) PANICS at runtime on wasm32-unknown-unknown
+// ("no filesystem on this platform"), and a browser tab has no persistent
+// temp dir or next-launch semantics anyway. The wasm no-ops below keep the
+// shared boot path (app::init) free of unsupported path APIs.
+
+#[cfg(not(target_family = "wasm"))]
 fn crash_marker_path() -> PathBuf {
     std::env::temp_dir().join("gpui-starter.crash-marker")
 }
 
 /// Write a crash marker file at startup. If the process crashes, this file
 /// will remain on disk so the next launch can detect it.
+#[cfg(not(target_family = "wasm"))]
 pub fn write_crash_marker() {
     let path = crash_marker_path();
     let pid = std::process::id();
@@ -249,6 +259,7 @@ pub fn write_crash_marker() {
 
 /// Check whether a crash marker from a previous run exists. Returns `Some`
 /// with the marker contents if found, `None` otherwise.
+#[cfg(not(target_family = "wasm"))]
 pub fn check_previous_crash() -> Option<String> {
     let path = crash_marker_path();
     if path.exists() {
@@ -270,6 +281,7 @@ pub fn check_previous_crash() -> Option<String> {
 }
 
 /// Remove the crash marker on a clean shutdown.
+#[cfg(not(target_family = "wasm"))]
 pub fn remove_crash_marker() {
     let path = crash_marker_path();
     if path.exists()
@@ -283,6 +295,20 @@ pub fn remove_crash_marker() {
         );
     }
 }
+
+/// Wasm: no filesystem — a crash marker can never be written. No-op.
+#[cfg(target_family = "wasm")]
+pub fn write_crash_marker() {}
+
+/// Wasm: no crash marker can ever exist; report no previous crash.
+#[cfg(target_family = "wasm")]
+pub fn check_previous_crash() -> Option<String> {
+    None
+}
+
+/// Wasm: no crash marker to remove. No-op.
+#[cfg(target_family = "wasm")]
+pub fn remove_crash_marker() {}
 
 #[cfg(test)]
 #[path = "lifecycle.test.rs"]

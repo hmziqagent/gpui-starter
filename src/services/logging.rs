@@ -54,7 +54,11 @@ pub fn initialize(cx: &mut App) {
     let file_prefix = "gpui-starter.log".to_string();
 
     let init_result = tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        // without_time: the fmt layer's default timer reads
+        // std::time::SystemTime on EVERY formatted event, which panics at
+        // runtime on wasm32-unknown-unknown. The browser console already
+        // timestamps each line, so the in-band timestamp is redundant here.
+        .with(tracing_subscriber::fmt::layer().without_time())
         .with(env_filter())
         .try_init();
 

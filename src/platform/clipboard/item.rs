@@ -4,7 +4,7 @@
 //! copy/monitor helpers. Kept free of any launcher-specific coupling so it
 //! can be reused by any gpui-starter derived app.
 
-use std::time::SystemTime;
+use crate::platform::clock::SystemTime;
 
 /// The content type of a single clipboard entry.
 ///

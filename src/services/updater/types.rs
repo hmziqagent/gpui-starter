@@ -1,3 +1,4 @@
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
 use gpui::actions;
@@ -114,6 +115,10 @@ pub(crate) fn platform_key() -> String {
     format!("{os}-{arch}")
 }
 
+// Native-only: `std::env::temp_dir()` panics at runtime on
+// wasm32-unknown-unknown ("no filesystem on this platform"), and both callers
+// (apply_update / check_pending_swap) are wasm no-ops.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn pending_swap_path() -> PathBuf {
     crate::platform::filesystem::paths::project_dirs()
         .map(|pd| {

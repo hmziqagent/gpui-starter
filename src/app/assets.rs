@@ -23,6 +23,44 @@ use gpui::{AssetSource, Result, SharedString};
 #[folder = "themes"]
 struct ProjectAssets;
 
+/// Wasm-only embedded assets: fonts + the gpui-kit default icon set.
+///
+/// Two wasm gaps this closes:
+///
+/// 1. **Fonts** — the wasm text system is created WITHOUT system fonts
+///    (`CosmicTextSystem::new_without_system_fonts` — a browser tab cannot
+///    enumerate installed fonts), so it starts empty and the FIRST text
+///    layout would panic ("failed to resolve font ... or any of the
+///    fallbacks"). `assets/fonts/NotoSans-Regular.ttf` (SIL OFL, license
+///    alongside) is registered at boot via [`crate::app::init`]; its family
+///    name is in gpui's default fallback stack, so every unresolved family
+///    eventually lands on it.
+///
+/// 2. **Icons** — `gpui_kit_assets::Assets` on wasm is an on-demand CDN
+///    loader: every icon requested before its fetch resolves logs a console
+///    ERROR ("Wasm assets loading, will be available soon..."), and with no
+///    `{endpoint}/assets/icons/` deployment those fetches 404 forever. The
+///    native `Assets` unit struct embeds the 101-icon default set listed in
+///    gpui-kit-assets' `default-icons.txt`; embedding the SAME set here
+///    gives exact native parity, synchronously, with no CDN dependency.
+#[cfg(target_family = "wasm")]
+#[derive(rust_embed::RustEmbed)]
+#[folder = "assets"]
+struct WasmAssets;
+
+/// Bytes of every embedded font (wasm-only; see [`WasmAssets`]). Only real
+/// font files are returned — the folder also carries the OFL license text,
+/// which fontdb rejects with a "malformed font" error if fed to it.
+#[cfg(target_family = "wasm")]
+pub fn embedded_font_bytes() -> Vec<Cow<'static, [u8]>> {
+    WasmAssets::iter()
+        .filter(|path| {
+            (path.ends_with(".ttf") || path.ends_with(".otf")) && path.starts_with("fonts/")
+        })
+        .filter_map(|path| WasmAssets::get(&path).map(|file| file.data))
+        .collect()
+}
+
 /// A merged [`AssetSource`] combining gpui-kit assets with project assets.
 pub struct CombinedAssets {
     component: gpui_kit_assets::Assets,
@@ -55,6 +93,13 @@ impl AssetSource for CombinedAssets {
         }
         // Project assets take precedence.
         if let Some(file) = ProjectAssets::get(path) {
+            return Ok(Some(file.data));
+        }
+        // Wasm: embedded fonts + default icon set (see `WasmAssets`) —
+        // checked synchronously BEFORE the on-demand CDN fallback so icons
+        // resolve without a network round-trip.
+        #[cfg(target_family = "wasm")]
+        if let Some(file) = WasmAssets::get(path) {
             return Ok(Some(file.data));
         }
         // Fall back to the bundled component assets (icons, etc.).

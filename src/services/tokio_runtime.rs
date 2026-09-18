@@ -60,10 +60,14 @@ impl TokioRuntime {
 #[cfg(target_family = "wasm")]
 impl TokioRuntime {
     pub fn new() -> Self {
+        // No drivers on wasm: this shim is never driven (see the impl note
+        // below), and `enable_all()` constructs the tokio time wheel, whose
+        // setup reads the clock — `tokio::time::Instant` IS
+        // `std::time::Instant`, which panics at runtime on
+        // wasm32-unknown-unknown ("time not implemented on this platform").
         let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
             .build()
-            .expect("failed to create tokio runtime");
+            .expect("failed to create tokio runtime shim");
         tracing::info!(
             target: "gpui_starter::tokio_runtime",
             "tokio current-thread runtime shim created (wasm; not driven)"

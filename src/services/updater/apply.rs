@@ -1,5 +1,7 @@
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
+#[cfg(not(target_family = "wasm"))]
 use super::types::*;
 use gpui::App;
 
@@ -7,6 +9,12 @@ use gpui::App;
 // Apply update
 // ---------------------------------------------------------------------------
 
+/// Wasm: updates never reach the Downloaded state (download is stubbed) and
+/// there is no filesystem to write a swap marker to. No-op.
+#[cfg(target_family = "wasm")]
+pub fn apply_update(_cx: &mut App) {}
+
+#[cfg(not(target_family = "wasm"))]
 pub fn apply_update(cx: &mut App) {
     let current = super::snapshot(cx);
     let (version, path) = match &current.status {
@@ -55,6 +63,11 @@ pub fn apply_update(cx: &mut App) {
 // Check and apply pending swap on startup
 // ---------------------------------------------------------------------------
 
+/// Wasm: no filesystem — a pending-swap marker can never exist. No-op.
+#[cfg(target_family = "wasm")]
+pub fn check_pending_swap(_cx: &mut App) {}
+
+#[cfg(not(target_family = "wasm"))]
 pub fn check_pending_swap(cx: &mut App) {
     let marker_path = pending_swap_path();
     if !marker_path.exists() {

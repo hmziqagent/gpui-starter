@@ -4014,6 +4014,7 @@ dependencies = [
  "wasm-bindgen",
  "wayland-client",
  "wayland-protocols-wlr",
+ "web-time",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod clock;
 #[cfg(target_os = "linux")]
 pub mod compositor;
 pub mod credentials;

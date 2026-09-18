@@ -17,7 +17,8 @@ use crate::app::theme::set_theme_mode;
 macro_rules! startup_step {
     ($cx:expr, $name:expr, $body:block) => {{
         crate::lifecycle::set_startup_step($name, $cx);
-        let _t = std::time::Instant::now();
+        // clock (not std::time): Instant::now panics at runtime on wasm.
+        let _t = crate::platform::clock::Instant::now();
         $body;
         tracing::info!(
             target: "gpui_starter::startup",
@@ -29,7 +30,30 @@ macro_rules! startup_step {
 }
 
 pub fn init(cx: &mut App) {
-    let startup_start = std::time::Instant::now();
+    // clock (not std::time): Instant::now panics at runtime on wasm.
+    let startup_start = crate::platform::clock::Instant::now();
+
+    // Wasm: the text system starts with an EMPTY font database (no system
+    // fonts in a browser tab); register the embedded fonts BEFORE anything
+    // can lay out text, or the first render panics in `resolve_font`.
+    #[cfg(target_family = "wasm")]
+    {
+        let fonts = crate::app::assets::embedded_font_bytes();
+        let count = fonts.len();
+        if let Err(err) = cx.text_system().add_fonts(fonts) {
+            tracing::error!(
+                target: "gpui_starter::startup",
+                error = %err,
+                "failed to register embedded fonts"
+            );
+        } else {
+            tracing::info!(
+                target: "gpui_starter::startup",
+                count,
+                "embedded fonts registered"
+            );
+        }
+    }
 
     crate::lifecycle::install_panic_hook();
 

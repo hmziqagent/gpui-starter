@@ -604,7 +604,8 @@ pub(super) async fn run_http(
     runtime: &std::sync::Arc<tokio::runtime::Runtime>,
     kind: HttpFetchKind,
 ) -> Result<HttpFetchResult, QueryError> {
-    let started = std::time::Instant::now();
+    // clock (not std::time): Instant::now panics at runtime on wasm.
+    let started = crate::platform::clock::Instant::now();
     let url = kind.url().to_string();
 
     // Native: spawn the exchange onto the driven tokio runtime and await the
