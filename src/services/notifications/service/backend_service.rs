@@ -10,12 +10,16 @@ use super::NotificationBackend;
 use super::UserNotifyBackend;
 #[cfg(target_family = "wasm")]
 use super::WasmStubBackend;
+// `service::mod` re-exports only the pre-existing backends, so the web
+// backend is imported through the backend module's own path.
 use super::types::{
     NotificationBackendKind, NotificationCapabilities, NotificationImportance,
     NotificationPermissionState, NotificationRequest, NotificationSendResult,
 };
 #[cfg(not(target_family = "wasm"))]
 use super::{NotificationBackend, NotifyRustBackend};
+#[cfg(target_family = "wasm")]
+use crate::services::notifications::backend::WebNotificationBackend;
 
 pub const LOG: &str = "gpui_starter::notifications";
 
@@ -291,6 +295,38 @@ impl NotificationService {
 /// (Linux native). `primary_error` records why a preferred backend was wanted
 /// but unavailable.
 fn select_primary_backend() -> (Option<Arc<dyn NotificationBackend>>, Option<String>) {
+    // Wasm/browser: the Web Notifications API is the closest web equivalent
+    // of an OS notification daemon (desktop browsers show real OS banners
+    // without any service worker). Very old browsers without
+    // `window.Notification` get `None` here — the UiOnly stub secondary
+    // keeps the shape honest and every send degrades to the in-app toast +
+    // inbox policy.
+    #[cfg(target_family = "wasm")]
+    {
+        match WebNotificationBackend::new() {
+            Ok(backend) => {
+                tracing::info!(
+                    target: LOG,
+                    backend = %NotificationBackendKind::Web,
+                    "primary notification backend selected"
+                );
+                (
+                    Some(Arc::new(backend) as Arc<dyn NotificationBackend>),
+                    None,
+                )
+            }
+            Err(reason) => {
+                tracing::warn!(
+                    target: LOG,
+                    backend = %NotificationBackendKind::Web,
+                    error = %reason,
+                    "primary notification backend unavailable; falling back"
+                );
+                (None, Some(reason))
+            }
+        }
+    }
+
     // macOS / Windows: user-notify gives the richest native experience.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -339,10 +375,10 @@ fn select_primary_backend() -> (Option<Arc<dyn NotificationBackend>>, Option<Str
     }
 
     // Linux native (or portal feature off): NotifyRust is the active backend.
-    // On macOS/Windows control always returned from the cfg block above, so the
-    // tail is gated to non-macOS/non-Windows to keep it from being flagged
-    // unreachable on those targets.
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    // On macOS/Windows control always returned from the cfg block above, and
+    // on wasm the web backend block above is the whole function body — the
+    // tail is gated to exclude all three so it is never flagged unreachable.
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_family = "wasm")))]
     {
         (None, None)
     }
