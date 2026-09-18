@@ -28,6 +28,16 @@ wasm-check:
 wasm-build:
     cargo +nightly build --target wasm32-unknown-unknown --lib
 
+# Release web artifact + wasm-bindgen glue into wasm/pkg/ (small .wasm;
+# the full release build of the gpui graph takes tens of minutes).
+wasm-release:
+    ./wasm/build.sh --release
+
+# Build (debug) and serve the wasm harness at http://127.0.0.1:8642/ with the
+# COOP/COEP headers the wasm_thread backend needs. Stop with Ctrl-C.
+wasm-serve:
+    ./wasm/build.sh && ./wasm/serve.sh
+
 test:
     cargo test --workspace --all-features
 

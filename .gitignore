@@ -31,5 +31,9 @@ package-lock.json
 
 tests/snapshots/
 
+# Wasm harness build artifacts (wasm-bindgen output) + serve PID
+wasm/pkg/
+wasm/serve.pid
+
 # z-workflow orchestration state
 .z-workflow/
