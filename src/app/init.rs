@@ -328,6 +328,7 @@ pub fn init(cx: &mut App) {
             );
             return;
         }
+        #[cfg(unix)]
         cx.dispatch_action(&Quit);
     });
 

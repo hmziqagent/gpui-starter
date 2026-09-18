@@ -196,22 +196,76 @@ impl ErrorPlaygroundPage {
                                 // (previously this read the global twice per click).
                                 let tokio_rt = cx
                                     .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>();
+                                // The wasm tokio runtime is an undriven shim —
+                                // only the client is needed there.
+                                #[cfg(not(target_family = "wasm"))]
                                 let rt = tokio_rt.0.runtime.clone();
                                 let client = tokio_rt.0.http_client.clone();
 
                                 cx.spawn(async move |this, cx| {
-                                    let result = rt
-                                        .spawn(async move {
-                                            client.get(ctx.url).timeout(ctx.timeout).send().await
-                                        })
-                                        .await;
+                                    // Native: reqwest needs the driven tokio
+                                    // runtime — spawn the request onto it and
+                                    // await the JoinHandle.
+                                    #[cfg(not(target_family = "wasm"))]
+                                    let msg = {
+                                        let result = rt
+                                            .spawn(async move {
+                                                client
+                                                    .get(ctx.url)
+                                                    .timeout(ctx.timeout)
+                                                    .send()
+                                                    .await
+                                            })
+                                            .await;
 
-                                    let msg = match result {
-                                        Ok(Ok(resp)) => {
-                                            format!("Unexpected success: status {}", resp.status())
+                                        match result {
+                                            Ok(Ok(resp)) => {
+                                                format!(
+                                                    "Unexpected success: status {}",
+                                                    resp.status()
+                                                )
+                                            }
+                                            Ok(Err(e)) => {
+                                                format!("{}: {e}", ctx.error_prefix)
+                                            }
+                                            Err(e) => format!("Task panicked: {e}"),
                                         }
-                                        Ok(Err(e)) => format!("{}: {e}", ctx.error_prefix),
-                                        Err(e) => format!("Task panicked: {e}"),
+                                    };
+
+                                    // Wasm: no driven tokio runtime, and the
+                                    // wasm RequestBuilder has no `.timeout()` —
+                                    // send directly from this local executor
+                                    // (reqwest runs on the browser fetch loop
+                                    // under any executor) and approximate the
+                                    // per-request timeout by racing the fetch
+                                    // against a GPUI timer; a timer win
+                                    // surfaces as the inline timeout error.
+                                    #[cfg(target_family = "wasm")]
+                                    let msg = {
+                                        let timeout = ctx.timeout;
+                                        let timer = cx.background_executor().timer(timeout);
+                                        let fetch = client.get(ctx.url).send();
+                                        match futures_util::future::select(
+                                            Box::pin(fetch),
+                                            Box::pin(timer),
+                                        )
+                                        .await
+                                        {
+                                            futures_util::future::Either::Left((Ok(resp), _)) => {
+                                                format!(
+                                                    "Unexpected success: status {}",
+                                                    resp.status()
+                                                )
+                                            }
+                                            futures_util::future::Either::Left((Err(e), _)) => {
+                                                format!("{}: {e}", ctx.error_prefix)
+                                            }
+                                            futures_util::future::Either::Right(_) => format!(
+                                                "{}: request timed out after {}ms",
+                                                ctx.error_prefix,
+                                                timeout.as_millis()
+                                            ),
+                                        }
                                     };
 
                                     this.update(cx, |this, cx| {

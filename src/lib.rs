@@ -36,6 +36,9 @@ pub mod state;
 #[cfg(test)]
 pub mod testing;
 pub mod ui;
+// Entry points: shared cfg-neutral `bootstrap` (used by src/main.rs) plus the
+// wasm-only `#[wasm_bindgen(start)]` entry. See src/web.rs.
+pub mod web;
 
 pub use app::lifecycle;
 pub use features::command_palette as launcher;
