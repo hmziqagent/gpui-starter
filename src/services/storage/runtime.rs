@@ -5,6 +5,9 @@ use gpui::{App, BorrowAppContext as _, Global};
 use super::{StorageBackend, StorageSnapshot};
 
 #[cfg(not(target_family = "wasm"))]
+use super::StorageError;
+
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
 /// GPUI Global holding the shared storage backend.
@@ -61,6 +64,13 @@ pub fn initialize(cx: &mut App) {
         // boot path: run it as a spawned task and patch the snapshot when it
         // lands (the native body resolves on its first poll, so this only
         // defers the bookkeeping, not the I/O semantics).
+        //
+        // The task must ALSO re-derive the capability status from the
+        // patched snapshot: the synchronous `set_capabilities` call below
+        // runs while `healthy` is still its default `false`, so without the
+        // re-set every healthy native boot would permanently register
+        // `degraded: true` (the registry has no observers). Mirrors the wasm
+        // boot task below.
         let backend_for_health = Arc::clone(&backend);
         let bg = cx.background_executor().clone();
         cx.spawn(async move |cx| {
@@ -68,32 +78,17 @@ pub fn initialize(cx: &mut App) {
                 .spawn(async move { backend_for_health.health_check().await })
                 .await;
             let _ = cx.update(|cx| {
-                cx.update_global::<StorageSnapshot, _>(|snap, _cx| match result {
-                    Ok(()) => snap.healthy = true,
-                    Err(err) => {
-                        snap.healthy = false;
-                        snap.last_error = Some(err.to_string());
-                    }
+                let updated = cx.update_global::<StorageSnapshot, _>(|snap, _cx| {
+                    record_health_result(snap, result);
+                    snap.clone()
                 });
+                set_capabilities(true, &updated, cx);
             });
         })
         .detach();
     }
 
-    crate::capabilities::set(
-        "storage",
-        crate::capabilities::CapabilityStatus {
-            supported: true,
-            enabled: snapshot.available,
-            degraded: snapshot.last_error.is_some() || !snapshot.healthy,
-            reason: snapshot
-                .last_error
-                .as_ref()
-                .map(|err| format!("storage issue: {err}").into()),
-            last_error: snapshot.last_error.clone().map(Into::into),
-        },
-        cx,
-    );
+    set_capabilities(true, &snapshot, cx);
 
     cx.set_global(snapshot);
     cx.set_global(StorageRuntime { backend });
@@ -189,25 +184,55 @@ pub fn initialize(cx: &mut App) {
     }
 }
 
-/// Wasm: `initialize` is synchronous but the worker boots asynchronously, so
-/// the capability status is re-derived from the (updated) snapshot once the
-/// boot task settles. Shared by both call sites above.
-#[cfg(target_family = "wasm")]
+/// Re-derive the capability-registry status from a snapshot.
+///
+/// `initialize` is synchronous on both targets, but the backends settle
+/// asynchronously: the health check (native) and the worker round-trip
+/// (wasm) land in spawned tasks. The registry has no observers to re-derive
+/// the status, so EVERY path that updates [`StorageSnapshot`] must call this
+/// again — the provisional boot snapshot always has `healthy: false`, and a
+/// one-shot set there would freeze `degraded: true` on every healthy boot.
 fn set_capabilities(supported: bool, snapshot: &StorageSnapshot, cx: &mut App) {
-    crate::capabilities::set(
-        "storage",
-        crate::capabilities::CapabilityStatus {
-            supported,
-            enabled: snapshot.available,
-            degraded: snapshot.last_error.is_some() || !snapshot.healthy,
-            reason: snapshot
-                .last_error
-                .as_ref()
-                .map(|err| format!("storage issue: {err}").into()),
-            last_error: snapshot.last_error.clone().map(Into::into),
-        },
-        cx,
-    );
+    crate::capabilities::set("storage", capability_status(supported, snapshot), cx);
+}
+
+/// Pure snapshot → capability-status derivation shared by every
+/// `set_capabilities` call site on both targets.
+///
+/// Unit-tested natively in `storage.test.rs` together with
+/// [`record_health_result`]: the full boot ordering cannot be exercised
+/// without a GPUI app context (gpui's `test-support` is not a dependency),
+/// so the test replays the exact initialize sequence over these helpers.
+pub(super) fn capability_status(
+    supported: bool,
+    snapshot: &StorageSnapshot,
+) -> crate::capabilities::CapabilityStatus {
+    crate::capabilities::CapabilityStatus {
+        supported,
+        enabled: snapshot.available,
+        degraded: snapshot.last_error.is_some() || !snapshot.healthy,
+        reason: snapshot
+            .last_error
+            .as_ref()
+            .map(|err| format!("storage issue: {err}").into()),
+        last_error: snapshot.last_error.clone().map(Into::into),
+    }
+}
+
+/// Fold a health-check outcome into a snapshot (native boot task; the wasm
+/// boot task folds health + schema version together instead).
+#[cfg(not(target_family = "wasm"))]
+pub(super) fn record_health_result(
+    snapshot: &mut StorageSnapshot,
+    result: Result<(), StorageError>,
+) {
+    match result {
+        Ok(()) => snapshot.healthy = true,
+        Err(err) => {
+            snapshot.healthy = false;
+            snapshot.last_error = Some(err.to_string());
+        }
+    }
 }
 
 pub fn snapshot(cx: &App) -> StorageSnapshot {

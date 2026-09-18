@@ -47,8 +47,9 @@ const LOG: &str = "gpui_starter::storage::web";
 const WORKER_URL: &str = "sqlite/worker.js";
 
 /// Informational label for the OPFS database (the worker owns the real
-/// path; snapshots only display it).
-pub(crate) const DB_PATH_LABEL: &str = "opfs:/gpui-starter/app.db";
+/// path; snapshots only display it). Matches the flat OPFS file the worker
+/// opens (`new OpfsDb("/gpui-starter-app.db")` in `wasm/sqlite/worker.js`).
+pub(crate) const DB_PATH_LABEL: &str = "opfs:/gpui-starter-app.db";
 
 /// Reply payload for a pending request.
 type Reply = Result<WorkerResult, String>;
