@@ -30,8 +30,11 @@ wasm-build:
 
 # Release web artifact + wasm-bindgen glue into wasm/pkg/ (small .wasm;
 # the full release build of the gpui graph takes tens of minutes).
+# wasm-opt (binaryen) runs inside build.sh when present; precompress then
+# writes .gz/.br siblings + pkg/version.json (drives the SW update cycle).
 wasm-release:
     ./wasm/build.sh --release
+    node wasm/precompress.mjs
 
 # Build (debug) and serve the wasm harness at http://127.0.0.1:8642/ with the
 # COOP/COEP headers the wasm_thread backend needs. Stop with Ctrl-C.

@@ -15,6 +15,13 @@
 #   https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.125/ \
 #     wasm-bindgen-0.2.125-x86_64-unknown-linux-musl.tar.gz
 # (the release asset is named `wasm-bindgen-…`, not `wasm-bindgen-cli-…`).
+#
+# --release additionally runs wasm-opt (binaryen) over the bindgen output.
+# Acquire the pinned binaryen from GitHub release assets (~seconds):
+#   https://github.com/WebAssembly/binaryen/releases/download/version_123/ \
+#     binaryen-version_123-x86_64-linux.tar.gz
+#   -> extract bin/wasm-opt to ~/.local/bin. Missing binary = warning +
+#   unoptimized artifact (the step is skippable; set WASM_OPT to override).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -73,5 +80,30 @@ mkdir -p wasm/pkg
     --out-dir wasm/pkg \
     --out-name gpui_starter
 
+# Release-only wasm-opt pass (binaryen) over the bindgen output. Skippable:
+# a missing binary logs a warning and keeps the unoptimized artifact.
+if [[ "${PROFILE_DIR}" == "release" ]]; then
+    OPT="${WASM_OPT:-wasm-opt}"
+    if command -v "${OPT}" >/dev/null 2>&1; then
+        OUT="wasm/pkg/gpui_starter_bg.opt.wasm"
+        BEFORE="$(stat -c%s wasm/pkg/gpui_starter_bg.wasm)"
+        echo "==> ${OPT} -O3 (this can take a few minutes)"
+        "${OPT}" -O3 \
+            --enable-bulk-memory --enable-mutable-globals \
+            --strip-debug \
+            -o "${OUT}" wasm/pkg/gpui_starter_bg.wasm
+        mv "${OUT}" wasm/pkg/gpui_starter_bg.wasm
+        AFTER="$(stat -c%s wasm/pkg/gpui_starter_bg.wasm)"
+        echo "    wasm-opt: ${BEFORE} -> ${AFTER} bytes"
+    else
+        echo "==> WARNING: wasm-opt not found — keeping unoptimized artifact" >&2
+        echo "    install: see the binaryen URL in this script's header" >&2
+    fi
+fi
+
 echo "==> done: wasm/pkg/gpui_starter.js + wasm/pkg/gpui_starter_bg.wasm"
+if [[ "${PROFILE_DIR}" == "release" ]]; then
+    echo "    precompress for serving (gzip/brotli + version.json):"
+    echo "      node wasm/precompress.mjs   (or: just wasm-release)"
+fi
 echo "    serve with: just wasm-serve  (or bash wasm/serve.sh)"
