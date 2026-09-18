@@ -83,12 +83,24 @@ class HarnessHandler(http.server.SimpleHTTPRequestHandler):
     # ---- negotiation helpers -------------------------------------------
 
     def _accepts(self, encoding: str) -> bool:
+        # RFC 9110 s12.4.2: an omitted q weight defaults to 1; q=0 means
+        # "not acceptable". Duplicates keep the highest weight.
         header = self.headers.get("Accept-Encoding", "")
+        best = 0.0
         for token in header.split(","):
-            token = token.strip().split(";")[0].strip().lower()
-            if token == encoding:
-                return True
-        return False
+            parts = token.strip().split(";")
+            if parts[0].strip().lower() != encoding:
+                continue
+            q = 1.0
+            for param in parts[1:]:
+                param = param.strip()
+                if param.lower().startswith("q="):
+                    try:
+                        q = float(param[2:])
+                    except ValueError:
+                        pass  # malformed weight: keep the default
+            best = max(best, q)
+        return best > 0.0
 
     def _serve_bytes(self, body: bytes, content_type: str) -> None:
         self.send_response(200)
