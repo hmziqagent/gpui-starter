@@ -1,14 +1,19 @@
 use std::{path::PathBuf, sync::Arc};
 
+use async_trait::async_trait;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
-use super::StorageBackend;
+use super::{StorageBackend, StorageError};
 
 /// SQLite-backed storage that holds a single shared connection rather than
 /// opening a new one on every operation. The connection is wrapped in
 /// `Arc<Mutex<Connection>>` because `rusqlite::Connection` is `Send` but not
 /// `Sync`, so every call serialises behind the mutex automatically.
+///
+/// The trait is async, but these bodies stay synchronous (no await points):
+/// the boxed future resolves on its first poll, so SQLite I/O still never
+/// yields mid-query and the `MutexGuard` never crosses a yield.
 #[derive(Clone, Debug)]
 pub(crate) struct SqliteStorage {
     conn: Arc<Mutex<Connection>>,
@@ -18,9 +23,10 @@ impl SqliteStorage {
     /// Open (or create) the database at `path` and return a storage handle
     /// that reuses the same connection for all future operations.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns `rusqlite::Error` if the database file cannot be opened.
+    /// Panics if the database file cannot be opened (boot-time invariant;
+    /// the storage runtime treats initialization separately via `init_db`).
     pub(crate) fn new(path: PathBuf) -> Self {
         let conn = Connection::open(&path).expect("failed to open sqlite connection");
         Self {
@@ -48,31 +54,34 @@ impl SqliteStorage {
     }
 }
 
+#[async_trait]
 impl StorageBackend for SqliteStorage {
-    fn schema_version(&self) -> rusqlite::Result<i64> {
+    async fn schema_version(&self) -> Result<i64, StorageError> {
         let conn = self.conn();
-        conn.query_row(
+        let version = conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
             [],
             |row| row.get(0),
-        )
+        )?;
+        Ok(version)
     }
 
-    fn health_check(&self) -> rusqlite::Result<()> {
+    async fn health_check(&self) -> Result<(), StorageError> {
         let conn = self.conn();
         let _: i64 = conn.query_row("SELECT 1", [], |row| row.get(0))?;
         Ok(())
     }
 
-    fn maintenance(&self) -> rusqlite::Result<()> {
+    async fn maintenance(&self) -> Result<(), StorageError> {
         let conn = self.conn();
-        conn.execute_batch("PRAGMA optimize;")
+        conn.execute_batch("PRAGMA optimize;")?;
+        Ok(())
     }
 
-    fn persist_error_record(
+    async fn persist_error_record(
         &self,
         error: &crate::error_surface::ErrorRecord,
-    ) -> rusqlite::Result<()> {
+    ) -> Result<(), StorageError> {
         let conn = self.conn();
         let actions_json = serde_json::to_string(&error.actions)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
@@ -93,10 +102,10 @@ impl StorageBackend for SqliteStorage {
         Ok(())
     }
 
-    fn load_error_history(
+    async fn load_error_history(
         &self,
         limit: usize,
-    ) -> rusqlite::Result<Vec<crate::error_surface::ErrorRecord>> {
+    ) -> Result<Vec<crate::error_surface::ErrorRecord>, StorageError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, occurred_at, severity, category, message, actions
@@ -143,7 +152,8 @@ impl StorageBackend for SqliteStorage {
                 _ => {
                     return Err(rusqlite::Error::InvalidParameterName(format!(
                         "unknown error category `{category_str}`"
-                    )));
+                    ))
+                    .into());
                 }
             };
             let actions: Vec<crate::error_surface::ErrorAction> =
@@ -161,10 +171,10 @@ impl StorageBackend for SqliteStorage {
         Ok(records)
     }
 
-    fn persist_crash_report(
+    async fn persist_crash_report(
         &self,
         report: &crate::services::crash_report::CrashReport,
-    ) -> rusqlite::Result<()> {
+    ) -> Result<(), StorageError> {
         let conn = self.conn();
         let recent_errors_json = serde_json::to_string(&report.recent_errors)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
@@ -186,10 +196,10 @@ impl StorageBackend for SqliteStorage {
         Ok(())
     }
 
-    fn load_pending_crash_reports(
+    async fn load_pending_crash_reports(
         &self,
         limit: usize,
-    ) -> rusqlite::Result<Vec<crate::services::crash_report::CrashReport>> {
+    ) -> Result<Vec<crate::services::crash_report::CrashReport>, StorageError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, panic_message, backtrace, app_version, os, arch, timestamp, render_path, recent_errors
@@ -253,7 +263,11 @@ impl StorageBackend for SqliteStorage {
         Ok(reports)
     }
 
-    fn mark_crash_report_uploaded(&self, id: &str, uploaded_at: &str) -> rusqlite::Result<()> {
+    async fn mark_crash_report_uploaded(
+        &self,
+        id: &str,
+        uploaded_at: &str,
+    ) -> Result<(), StorageError> {
         let conn = self.conn();
         conn.execute(
             "UPDATE crash_reports SET uploaded = 1, uploaded_at = ?1 WHERE id = ?2",

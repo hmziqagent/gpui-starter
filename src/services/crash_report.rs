@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // CrashReport data model
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CrashReport {
     pub id: String,
     pub panic_message: String,
@@ -164,8 +164,10 @@ pub fn detect_pending_reports(data_dir: &Path) -> Vec<CrashReport> {
 /// Silently returns when the upload endpoint is empty or the storage backend
 /// is not available.
 ///
-/// Wasm: there is no SQLite backend to load pending reports from, so the
-/// upload path is a no-op.
+/// Wasm: crash reports are born on disk from the native panic hook
+/// (`write_crash_report`), which has no wasm counterpart — so even though
+/// the OPFS storage backend now implements the full trait surface, there is
+/// never a pending report to upload and this stays a no-op.
 #[cfg(not(target_family = "wasm"))]
 pub fn upload_pending_reports(cx: &mut App) {
     let snap = snapshot(cx);
@@ -202,7 +204,7 @@ pub fn upload_pending_reports(cx: &mut App) {
         let reports = {
             let backend = backend.clone();
             cx.background_executor()
-                .spawn(async move { backend.load_pending_crash_reports(50) })
+                .spawn(async move { backend.load_pending_crash_reports(50).await })
                 .await
         };
 
@@ -256,7 +258,9 @@ pub fn upload_pending_reports(cx: &mut App) {
                     let id = report.id.clone();
                     let mark_result = cx
                         .background_executor()
-                        .spawn(async move { backend.mark_crash_report_uploaded(&id, &uploaded_at) })
+                        .spawn(async move {
+                            backend.mark_crash_report_uploaded(&id, &uploaded_at).await
+                        })
                         .await;
                     if let Err(err) = mark_result {
                         tracing::warn!(
@@ -293,7 +297,7 @@ pub fn upload_pending_reports(cx: &mut App) {
         let _ = cx.update(|cx| {
             let pending = cx
                 .background_executor()
-                .spawn(async move { backend.load_pending_crash_reports(1) });
+                .spawn(async move { backend.load_pending_crash_reports(1).await });
             cx.spawn(async move |cx| {
                 let (count, timestamp) = match pending.await {
                     Ok(r) => (r.len(), r.first().map(|r| r.timestamp.clone())),
@@ -316,13 +320,14 @@ pub fn upload_pending_reports(cx: &mut App) {
 // Shutdown
 // ---------------------------------------------------------------------------
 
-/// Wasm counterpart of [`upload_pending_reports`]: no SQLite backend exists,
-/// so there is nothing to upload.
+/// Wasm counterpart of [`upload_pending_reports`]: crash reports have no
+/// wasm producer (the panic hook writes them to disk natively), so there is
+/// nothing to upload.
 #[cfg(target_family = "wasm")]
 pub fn upload_pending_reports(_cx: &mut App) {
     tracing::debug!(
         target: "gpui_starter::crash_report",
-        "crash report upload unavailable on wasm (no sqlite backend)"
+        "crash report upload unavailable on wasm (no crash report producer)"
     );
 }
 

@@ -59,8 +59,15 @@ fn persist_and_load_roundtrip() {
         actions: vec![ErrorAction::Dismiss],
     };
 
-    persist_error(&backend, &record).expect("persist");
-    let loaded = load_error_history(&backend, 10).expect("load");
+    // persist_error/load_error_history are async (the wasm backend answers
+    // via worker round-trips); the native body resolves on first poll.
+    let runtime = || tokio::runtime::Runtime::new().expect("tokio runtime for test");
+    runtime()
+        .block_on(persist_error(&backend, &record))
+        .expect("persist");
+    let loaded = runtime()
+        .block_on(load_error_history(&backend, 10))
+        .expect("load");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].message, "disk full");
     assert_eq!(loaded[0].category, ErrorCategory::Storage);
@@ -90,6 +97,7 @@ fn load_error_history_respects_limit() {
     }
 
     let backend = SqliteStorage::new_for_test(db_path);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime for test");
 
     for i in 0..5 {
         let record = ErrorRecord {
@@ -100,9 +108,13 @@ fn load_error_history_respects_limit() {
             message: format!("error {i}"),
             actions: vec![],
         };
-        persist_error(&backend, &record).expect("persist");
+        runtime
+            .block_on(persist_error(&backend, &record))
+            .expect("persist");
     }
 
-    let loaded = load_error_history(&backend, 3).expect("load");
+    let loaded = runtime
+        .block_on(load_error_history(&backend, 3))
+        .expect("load");
     assert_eq!(loaded.len(), 3);
 }
