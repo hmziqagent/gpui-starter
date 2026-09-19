@@ -3926,8 +3926,8 @@ checksum = "70a09e0bf58aede45b8e7eed6e8d5d6552381c431014d62b349b0133008737bd"
 
 [[package]]
 name = "gpui-query"
-version = "0.2.0"
-source = "git+https://github.com/hmziqagent/gpui-query?rev=81b0a33066fd48ca759aecef83555f9f460ef489#81b0a33066fd48ca759aecef83555f9f460ef489"
+version = "0.2.1"
+source = "git+https://github.com/hmziqagent/gpui-query?rev=1449ef2#1449ef203af1192ff5dcd370c8db6227f83efd8d"
 dependencies = [
  "ahash 0.8.12",
  "gpui-pre",
@@ -3967,6 +3967,7 @@ dependencies = [
  "gpui-query",
  "insta",
  "interprocess",
+ "js-sys",
  "keyring",
  "koruma",
  "koruma-collection",
@@ -4011,8 +4012,11 @@ dependencies = [
  "url",
  "user-notify",
  "uuid",
+ "wasm-bindgen",
  "wayland-client",
  "wayland-protocols-wlr",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]

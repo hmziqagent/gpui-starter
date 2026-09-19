@@ -35,69 +35,75 @@ pub fn initialize(cx: &mut gpui::App) {
         check::check_for_updates(cx);
     });
 
-    // Schedule a delayed startup check (5 seconds after launch).
-    let startup_rt = cx
-        .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
-        .0
-        .runtime
-        .clone();
-    cx.spawn(async move |cx| {
-        startup_rt
-            .spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    types::STARTUP_CHECK_DELAY_SECS,
-                ))
-                .await;
-            })
-            .await
-            .ok();
-        cx.update(|cx| {
-            tracing::info!(
-                target: "gpui_starter::updater",
-                "running startup update check"
-            );
-            check::check_for_updates(cx);
-        });
-    })
-    .detach();
-
-    // Schedule periodic re-check every 4 hours.
-    let periodic_rt = cx
-        .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
-        .0
-        .runtime
-        .clone();
-    cx.spawn(async move |cx| {
-        loop {
-            periodic_rt
+    // Self-update is a desktop-only concept (binary swap on disk). Wasm
+    // "updates" ship with the page reload — skip the scheduled checks; the
+    // action handler above still runs and resolves to UpToDate.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // Schedule a delayed startup check (5 seconds after launch).
+        let startup_rt = cx
+            .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
+            .0
+            .runtime
+            .clone();
+        cx.spawn(async move |cx| {
+            startup_rt
                 .spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(
-                        types::PERIODIC_CHECK_INTERVAL_SECS,
+                        types::STARTUP_CHECK_DELAY_SECS,
                     ))
                     .await;
                 })
                 .await
                 .ok();
-
-            let should_check: bool = cx.update(|cx| {
-                let snap = snapshot(cx);
-                matches!(
-                    snap.status,
-                    UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Error(_)
-                )
+            cx.update(|cx| {
+                tracing::info!(
+                    target: "gpui_starter::updater",
+                    "running startup update check"
+                );
+                check::check_for_updates(cx);
             });
-            if should_check {
-                cx.update(|cx| {
-                    tracing::info!(
-                        target: "gpui_starter::updater",
-                        "running periodic update check"
-                    );
-                    check::check_for_updates(cx);
+        })
+        .detach();
+
+        // Schedule periodic re-check every 4 hours.
+        let periodic_rt = cx
+            .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
+            .0
+            .runtime
+            .clone();
+        cx.spawn(async move |cx| {
+            loop {
+                periodic_rt
+                    .spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            types::PERIODIC_CHECK_INTERVAL_SECS,
+                        ))
+                        .await;
+                    })
+                    .await
+                    .ok();
+
+                let should_check: bool = cx.update(|cx| {
+                    let snap = snapshot(cx);
+                    matches!(
+                        snap.status,
+                        UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Error(_)
+                    )
                 });
+                if should_check {
+                    cx.update(|cx| {
+                        tracing::info!(
+                            target: "gpui_starter::updater",
+                            "running periodic update check"
+                        );
+                        check::check_for_updates(cx);
+                    });
+                }
             }
-        }
-    })
-    .detach();
+        })
+        .detach();
+    }
 
     tracing::info!(
         target: "gpui_starter::updater",

@@ -7,7 +7,9 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::platform::clock::Instant;
 
 use crate::{ids::TaskId, time::AppTimestamp};
 

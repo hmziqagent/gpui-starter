@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod clock;
 #[cfg(target_os = "linux")]
 pub mod compositor;
 pub mod credentials;
@@ -15,3 +16,7 @@ pub mod liquid_glass;
 pub mod native_notifications;
 pub mod network;
 pub mod process;
+// Browser API bridges (clipboard, hash deep links, favicon/title,
+// connectivity events) — wasm32-unknown-unknown only.
+#[cfg(target_family = "wasm")]
+pub mod web;

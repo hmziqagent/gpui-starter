@@ -2,12 +2,14 @@
 
 use std::{io, path::PathBuf};
 
+#[cfg(not(target_family = "wasm"))]
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions,
     prelude::*,
     tokio::Stream as TokioStream,
     traits::tokio::{Listener as _, Stream as _},
 };
+#[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const LOG: &str = "gpui_starter::ipc";
@@ -17,6 +19,9 @@ const LOG: &str = "gpui_starter::ipc";
 /// Provides a thin abstraction over `interprocess` local sockets with
 /// newline-delimited framing. Each message is a single UTF-8 line
 /// terminated by `\n`.
+///
+/// Wasm: there are no local sockets on wasm32-unknown-unknown — `send`
+/// and `listen` return errors and `is_listening` reports `false`.
 ///
 /// # Example
 ///
@@ -36,6 +41,7 @@ pub struct IpcEndpoint {
     socket_path: PathBuf,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl IpcEndpoint {
     /// Create a new endpoint identified by `name`.
     ///
@@ -91,6 +97,7 @@ impl IpcEndpoint {
     /// Check whether a listener is likely active by attempting a connection.
     ///
     /// Returns `true` if the socket accepts a connection, `false` otherwise.
+    #[cfg(not(target_family = "wasm"))]
     pub fn is_listening(&self) -> bool {
         let name = match self.resolve_name() {
             Ok(n) => n,
@@ -102,6 +109,7 @@ impl IpcEndpoint {
     // -- helpers --------------------------------------------------------
 
     /// Build a socket path in the application cache/runtime directory.
+    #[cfg(not(target_family = "wasm"))]
     fn resolve_socket_path(name: &str) -> PathBuf {
         if let Some(project_dirs) = crate::platform::filesystem::paths::project_dirs() {
             project_dirs
@@ -114,6 +122,7 @@ impl IpcEndpoint {
     }
 
     /// Resolve the platform-appropriate socket name.
+    #[cfg(not(target_family = "wasm"))]
     fn resolve_name(&self) -> io::Result<interprocess::local_socket::Name<'_>> {
         if GenericNamespaced::is_supported() {
             self.socket_path
@@ -127,6 +136,42 @@ impl IpcEndpoint {
                 .to_string()
                 .to_fs_name::<GenericFilePath>()
         }
+    }
+}
+
+/// Wasm: no local sockets exist — every operation degrades to an error /
+/// `false`, keeping the API shape intact for callers.
+#[cfg(target_family = "wasm")]
+impl IpcEndpoint {
+    /// Create a new endpoint identified by `name` (no-op bookkeeping on wasm).
+    pub fn new(name: &str) -> Self {
+        Self {
+            socket_path: PathBuf::from(name),
+        }
+    }
+
+    /// Always fails: no local sockets on wasm.
+    pub async fn send(&self, _message: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "ipc unavailable on wasm",
+        ))
+    }
+
+    /// Always fails: no local sockets on wasm.
+    pub async fn listen<F>(&self, _handler: F) -> io::Result<()>
+    where
+        F: Fn(String),
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "ipc unavailable on wasm",
+        ))
+    }
+
+    /// Always `false`: no local sockets on wasm.
+    pub fn is_listening(&self) -> bool {
+        false
     }
 }
 

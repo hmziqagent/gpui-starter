@@ -29,8 +29,8 @@ impl QueryPlaygroundPage {
             .and_then(|(e, _)| e.read_with(cx, |r, _| r.data().cloned()));
         let cache_age = self.simple_query.as_ref().and_then(|(e, _)| {
             e.read_with(cx, |r, _| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let now = crate::platform::clock::SystemTime::now()
+                    .duration_since(crate::platform::clock::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis();
                 r.last_updated_at_ms()

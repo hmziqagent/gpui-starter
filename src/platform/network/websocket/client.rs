@@ -4,6 +4,11 @@
 //! `tokio-tungstenite`. When disabled, provides a stub that returns
 //! `FeatureDisabled` errors.
 
+// `MessageHandler` is only referenced by the live (feature-on) client; the
+// feature-off stub below never names it.
+#[cfg(feature = "websocket")]
+use super::{ConnectionState, MessageHandler, ReconnectPolicy, WebSocketError};
+#[cfg(not(feature = "websocket"))]
 use super::{ConnectionState, ReconnectPolicy, WebSocketError};
 
 // ---------------------------------------------------------------------------
@@ -23,7 +28,7 @@ mod live {
     use futures_util::{SinkExt, StreamExt};
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    use tokio_tungstenite::{connect_async, tungstenite::protocol::CloseFrame};
+    use tokio_tungstenite::connect_async;
 
     /// The underlying TCP+TLS stream type used by `tokio-tungstenite`.
     type WsStream = tokio_tungstenite::WebSocketStream<

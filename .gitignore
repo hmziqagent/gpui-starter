@@ -31,5 +31,16 @@ package-lock.json
 
 tests/snapshots/
 
+# Wasm harness build artifacts (wasm-bindgen output, precompressed
+# siblings, version.json — all under pkg/) + serve PID + precompressed
+# HTML and vendored-sqlite siblings
+wasm/pkg/
+wasm/serve.pid
+wasm/index.html.gz
+wasm/index.html.br
+wasm/sqlite/*.gz
+wasm/sqlite/*.br
+wasm/__pycache__/
+
 # z-workflow orchestration state
 .z-workflow/

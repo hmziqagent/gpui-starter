@@ -22,5 +22,9 @@ pub use types::NotificationImportance;
 pub(super) use crate::services::notifications::backend::PortalBackend;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(super) use crate::services::notifications::backend::UserNotifyBackend;
+// notify-rust has no wasm build; the wasm stub backend takes its place.
+#[cfg(not(target_family = "wasm"))]
 pub(super) use crate::services::notifications::backend::{NotificationBackend, NotifyRustBackend};
+#[cfg(target_family = "wasm")]
+pub(super) use crate::services::notifications::backend::{NotificationBackend, WasmStubBackend};
 pub(super) use crate::services::notifications::inbox;

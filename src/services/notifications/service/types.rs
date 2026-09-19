@@ -21,6 +21,11 @@ pub enum NotificationBackendKind {
     NotifyRust,
     #[cfg(feature = "notifications-portal")]
     Portal,
+    /// Browser Web Notifications API. Compiled unconditionally so the enum
+    /// needs no `cfg` ripples through `Display`/`matches` arms — on native
+    /// builds the variant simply never occurs (the wasm-only
+    /// `WebNotificationBackend` is its sole producer).
+    Web,
     UiOnly,
 }
 
@@ -31,6 +36,7 @@ impl fmt::Display for NotificationBackendKind {
             Self::NotifyRust => f.write_str("notify-rust"),
             #[cfg(feature = "notifications-portal")]
             Self::Portal => f.write_str("xdg-portal"),
+            Self::Web => f.write_str("web-notification"),
             Self::UiOnly => f.write_str("in-app only"),
         }
     }
@@ -165,9 +171,21 @@ pub struct NotificationSendResult {
     /// FreeDesktop `Notify` D-Bus call succeeded). **Not** proof the user saw
     /// a banner: GNOME/FreeDesktop returns `Ok` even when the banner is
     /// suppressed by Do-Not-Disturb, per-app mute, busy, or fullscreen, and the
-    /// spec provides no display-confirmation signal. Treat as "accepted by the
-    /// daemon", not "delivered to the user".
+    /// spec provides no display-confirmation signal. Treat as "accepted by
+    /// the daemon", not "delivered to the user".
     pub delivered_natively: bool,
     pub error_summary: Option<SharedString>,
     pub importance: NotificationImportance,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_backend_kind_displays() {
+        // The kind flows into inbox records and the status bar through
+        // Display — lock the string.
+        assert_eq!(NotificationBackendKind::Web.to_string(), "web-notification");
+    }
 }

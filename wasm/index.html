@@ -1,0 +1,240 @@
+<!doctype html>
+<!-- Wasm dev harness for gpui-starter.
+
+     Served by wasm/serve.sh (COOP/COEP required so wasm_thread can use
+     SharedArrayBuffer / crossOriginIsolated). The gpui web platform
+     (gpui-pre-web) CREATES ITS OWN <canvas> (100% x 100%, display:block) and
+     appends it to document.body when the window opens — this page only
+     provides full-viewport styling, a loading indicator, and an error
+     surface so a failed boot is visible without opening devtools.
+
+     Artifacts come from wasm/build.sh (wasm-bindgen --target web):
+       ./pkg/gpui_starter.js + ./pkg/gpui_starter_bg.wasm
+
+     PWA: manifest.webmanifest + sw.js (registered below, feature-detected,
+     fails silently outside secure contexts). sw.js is served no-store with
+     the build version injected; when a new build activates it postMessages
+     this page, which shows the #update-toast reload affordance.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gpui-starter (wasm)</title>
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="theme-color" content="#1b1c26">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1b1c26;
+      color: #e6e6ef;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      z-index: 10;
+    }
+    #loading .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid rgba(255, 255, 255, 0.15);
+      border-top-color: #e6e6ef;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading .coi-status {
+      font-size: 12px;
+      opacity: 0.65;
+      font-family: ui-monospace, monospace;
+    }
+    #errors {
+      display: none;
+      position: fixed;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      max-height: 45%;
+      overflow: auto;
+      z-index: 20;
+      background: #3a1113;
+      border: 1px solid #a33;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font: 12px/1.5 ui-monospace, monospace;
+      color: #ffd9d9;
+      white-space: pre-wrap;
+    }
+    #update-toast {
+      display: none;
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 30;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px 10px 14px;
+      background: #262733;
+      border: 1px solid rgba(230, 230, 239, 0.22);
+      border-radius: 8px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      font: 13px/1.4 ui-monospace, monospace;
+      color: #e6e6ef;
+    }
+    #update-toast.show { display: flex; }
+    #update-toast button {
+      appearance: none;
+      border: none;
+      border-radius: 5px;
+      padding: 5px 12px;
+      background: #e6e6ef;
+      color: #1b1c26;
+      font: 600 12px/1.4 ui-monospace, monospace;
+      cursor: pointer;
+    }
+    #update-toast button:hover { background: #ffffff; }
+  </style>
+  <script>
+    // Error surface: registered before anything else can fail so a broken
+    // boot is visible in the DOM (not only in devtools). Panel stays hidden
+    // while empty — "app rendered" implies it never appears.
+    (function () {
+      var panel = null;
+      function show(message) {
+        if (!panel) {
+          panel = document.createElement("div");
+          panel.id = "errors";
+          document.body.appendChild(panel);
+        }
+        panel.style.display = "block";
+        panel.textContent += message + "\n";
+      }
+      window.__wasmShowError = show;
+      window.addEventListener("error", function (e) {
+        show((e.error && e.error.stack) || e.message || String(e));
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        var r = e.reason;
+        show("Unhandled rejection: " + ((r && (r.stack || r.message)) || String(r)));
+      });
+    })();
+  </script>
+  <script>
+    // WebGL screenshot fidelity: without `preserveDrawingBuffer` the browser
+    // invalidates the drawing buffer after compositing, and headless
+    // (software-rasterized) capture pipelines photograph the gpui canvas as
+    // a blank rectangle even while the app renders correctly on screen. The
+    // app renders via wgpu's WebGL2 backend, so force the flag for every
+    // webgl/webgl2 context created on this page. Minor perf cost, exact
+    // pixels for screenshots/CI — the right trade for a dev harness.
+    (function () {
+      var orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, opts) {
+        if (type === "webgl" || type === "webgl2") {
+          return orig.call(this, type, Object.assign({}, opts || {}, {
+            preserveDrawingBuffer: true,
+          }));
+        }
+        return orig.call(this, type, opts);
+      };
+    })();
+  </script>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div>Loading gpui-starter (wasm)…</div>
+    <div class="coi-status">crossOriginIsolated: <span id="coi">…</span></div>
+  </div>
+  <div id="update-toast" role="alert">
+    <span>New version available</span>
+    <button type="button">Reload</button>
+  </div>
+  <script>
+    // Report isolation status (needs the COOP/COEP headers serve.sh sends).
+    document.getElementById("coi").textContent = String(window.crossOriginIsolated);
+  </script>
+  <script>
+    // Service worker (PWA install + versioned app-shell cache + update
+    // detection). Feature-detected and fail-silent: file:// and plain
+    // http:// (except localhost, which IS a secure context) have no SW —
+    // the app boots exactly the same without it.
+    (function () {
+      if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+      // The version this page booted under: asked from the controlling SW
+      // when there is one, else read from the network (first-ever visit —
+      // the SW registering now will match it, so no toast on install). Only
+      // a takeover by a DIFFERENT version shows the reload toast.
+      var bootVersion = null;
+      var toast = document.getElementById("update-toast");
+      function showUpdateToast() {
+        toast.classList.add("show");
+        toast.querySelector("button").addEventListener("click", function () {
+          location.reload();
+        }, { once: true });
+      }
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "get-version" });
+      } else {
+        fetch("./pkg/version.json", { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) { bootVersion = (j && j.version) || null; })
+          .catch(function () { /* dev harness without version.json */ });
+      }
+      navigator.serviceWorker.addEventListener("message", function (e) {
+        var d = e.data;
+        if (!d) return;
+        if (d.type === "sw-version") {
+          bootVersion = d.version;
+        } else if (d.type === "update-available") {
+          if (d.version && bootVersion && d.version !== bootVersion) {
+            showUpdateToast();
+          }
+        }
+      });
+      navigator.serviceWorker
+        .register("./sw.js")
+        .then(function (reg) {
+          // Nudge the browser's own update check while long-lived tabs sit
+          // open; sw.js is no-store, so this is one cheap conditional GET.
+          setInterval(function () { reg.update().catch(function () {}); }, 60 * 60 * 1000);
+        })
+        .catch(function () { /* dev contexts / SW unavailable — fine */ });
+    })();
+  </script>
+  <script type="module">
+    // Hide the loading indicator once the gpui web platform has appended its
+    // canvas to <body> — that (plus an empty #errors) is the DOM-level proof
+    // that the app booted and rendered.
+    const loading = document.getElementById("loading");
+    const observer = new MutationObserver(() => {
+      if (document.querySelector("body > canvas")) {
+        observer.disconnect();
+        loading.remove();
+      }
+    });
+    observer.observe(document.body, { childList: true });
+
+    // Instantiate the module; `#[wasm_bindgen(start)]` (src/web.rs) runs the
+    // shared bootstrap during initialization — no explicit call needed.
+    import("./pkg/gpui_starter.js")
+      .then((mod) => mod.default())
+      .catch((err) => {
+        loading.querySelector("div").textContent = "Failed to load wasm module";
+        window.__wasmShowError((err && (err.stack || err.message)) || String(err));
+      });
+  </script>
+</body>
+</html>

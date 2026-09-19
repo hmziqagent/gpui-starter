@@ -510,6 +510,7 @@ impl QueryPlaygroundPage {
             kind.url()
         ));
 
+        #[cfg(not(target_family = "wasm"))]
         fetch_query_with_signal(
             &entity,
             move |signal| {
@@ -524,6 +525,25 @@ impl QueryPlaygroundPage {
             },
             cx,
         );
+
+        // Wasm: reqwest's futures are `!Send` (JS `Rc`/closure internals) but
+        // the query hooks demand `Send` futures. GPUI's executor is
+        // single-threaded (`boxed_local`), so the fetch is pre-spawned there
+        // and the query future only awaits the `Send` task handle.
+        #[cfg(target_family = "wasm")]
+        {
+            let http_task = spawn_http_local(cx, &client, &runtime, kind);
+            fetch_query_with_signal(
+                &entity,
+                move |signal| async move {
+                    if signal.is_cancelled() {
+                        return Err(QueryError::cancelled("cancelled before send"));
+                    }
+                    http_task.await
+                },
+                cx,
+            );
+        }
     }
 
     pub(in super::super) fn reset_http(&mut self, cx: &mut Context<Self>) {
@@ -538,44 +558,74 @@ impl QueryPlaygroundPage {
 // ---------------------------------------------------------------------------
 // Shared HTTP executor (free functions)
 //
-// reqwest cannot run on gpui's (non-tokio) executor, so each request is
-// `runtime.spawn`-ed onto the tokio runtime and the JoinHandle is awaited from
-// the fetch closure. Shared by the lazy initial fetch (GET JSON, in `init`) and
-// `fetch_http`.
+// Native: reqwest cannot run on gpui's (non-tokio) executor, so each request
+// is `runtime.spawn`-ed onto the tokio runtime and the JoinHandle is awaited
+// from the fetch closure. Shared by the lazy initial fetch (GET JSON, in
+// `init`) and `fetch_http`.
+//
+// Wasm: there is no driven tokio runtime (see
+// `crate::services::tokio_runtime`), and none is needed — reqwest's wasm
+// backend runs on the browser fetch event loop under any executor. Its
+// futures are `!Send`, though, so callers bridge through
+// [`spawn_http_local`] to satisfy the query hooks' `Send` bounds.
 // ---------------------------------------------------------------------------
+
+/// Perform the raw HTTP exchange: send the request and buffer the response
+/// body, returning `(status, content_type, raw_body)`.
+///
+/// On wasm this future is `!Send` (reqwest's wasm `Response` holds JS
+/// closures), so it must only be awaited from GPUI's local executor — never
+/// handed to an API with a `Send` bound.
+async fn exchange(
+    client: reqwest::Client,
+    kind: HttpFetchKind,
+    url: String,
+) -> Result<(u16, String, String), QueryError> {
+    let resp = build_request(&client, kind, &url)
+        .send()
+        .await
+        .map_err(|e| QueryError::response(format!("send: {e}")))?;
+    let status = resp.status().as_u16();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let raw = resp
+        .text()
+        .await
+        .map_err(|e| QueryError::response(format!("body: {e}")))?;
+    Ok((status, content_type, raw))
+}
 
 pub(super) async fn run_http(
     client: &reqwest::Client,
     runtime: &std::sync::Arc<tokio::runtime::Runtime>,
     kind: HttpFetchKind,
 ) -> Result<HttpFetchResult, QueryError> {
-    let started = std::time::Instant::now();
+    // clock (not std::time): Instant::now panics at runtime on wasm.
+    let started = crate::platform::clock::Instant::now();
     let url = kind.url().to_string();
-    let join = {
-        let client = client.clone();
-        let url = url.clone();
-        runtime.spawn(async move {
-            let resp = build_request(&client, kind, &url)
-                .send()
-                .await
-                .map_err(|e| QueryError::response(format!("send: {e}")))?;
-            let status = resp.status().as_u16();
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_string();
-            let raw = resp
-                .text()
-                .await
-                .map_err(|e| QueryError::response(format!("body: {e}")))?;
-            Ok::<_, QueryError>((status, content_type, raw))
-        })
+
+    // Native: spawn the exchange onto the driven tokio runtime and await the
+    // JoinHandle from this (GPUI-executor-driven) future.
+    #[cfg(not(target_family = "wasm"))]
+    let (status, content_type, raw) = {
+        let join = runtime.spawn(exchange(client.clone(), kind, url.clone()));
+        let joined = join
+            .await
+            .map_err(|e| QueryError::response(format!("join: {e}")))?;
+        joined?
     };
-    let (status, content_type, raw) = join
-        .await
-        .map_err(|e| QueryError::response(format!("join: {e}")))??;
+
+    // Wasm: await the exchange directly — the browser fetch event loop drives
+    // it. (The undriven wasm tokio shim is deliberately unused.)
+    #[cfg(target_family = "wasm")]
+    let (status, content_type, raw) = {
+        let _ = runtime;
+        exchange(client.clone(), kind, url.clone()).await?
+    };
 
     // Pretty-print JSON bodies for readability; truncate long bodies for display.
     let is_json = matches!(kind, HttpFetchKind::GetJson | HttpFetchKind::PostJson);
@@ -602,6 +652,25 @@ pub(super) async fn run_http(
         body,
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+/// Wasm-only bridge: pre-spawn `run_http` on GPUI's single-threaded executor.
+///
+/// The query hooks (`use_query`, `fetch_query_with_signal`) require `Send`
+/// futures, but reqwest's wasm futures are `!Send`. GPUI's foreground
+/// executor polls local futures (`boxed_local`), and its [`Task`] handle is
+/// `Send` whenever the output is — so callers hand the hook a future that
+/// just awaits the handle.
+#[cfg(target_family = "wasm")]
+pub(super) fn spawn_http_local(
+    cx: &mut Context<QueryPlaygroundPage>,
+    client: &reqwest::Client,
+    runtime: &std::sync::Arc<tokio::runtime::Runtime>,
+    kind: HttpFetchKind,
+) -> gpui::Task<Result<HttpFetchResult, QueryError>> {
+    let client = client.clone();
+    let runtime = runtime.clone();
+    cx.spawn(async move |_this, _cx| run_http(&client, &runtime, kind).await)
 }
 
 fn build_request(

@@ -10,6 +10,10 @@
 //! runtime, so any future that needs tokio (HTTP clients, `tokio::time`, …)
 //! must be spawned through this shared runtime.
 //!
+//! On wasm there is no driven tokio runtime (the global is an inert shim), so
+//! the same pump is polled inline on GPUI's executor — the browser event loop
+//! wakes it whenever the stream's JS-backed I/O progresses.
+//!
 //! # Completion + error semantics
 //!
 //! Tokens flow through the returned receiver as `String` values. The stream
@@ -61,53 +65,63 @@ where
 {
     let (tx, rx) = flume::unbounded::<String>();
 
+    #[cfg(not(target_family = "wasm"))]
     let runtime = cx
         .try_global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
         .map(|g| g.0.runtime.clone());
 
-    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
-        let Some(runtime) = runtime else {
-            tracing::warn!(
-                target: "gpui_starter::streaming",
-                "TokioRuntimeGlobal not set; token stream cannot start"
-            );
-            // tx drops here, closing the channel.
-            return;
-        };
-
-        // Drive the stream on the shared tokio runtime. The handle is detached
-        // so the producer keeps running independently of this GPUI Task; the
-        // GPUI Task just waits for it. Dropping the receiver cancels the loop.
-        runtime
-            .spawn(async move {
-                use futures_util::StreamExt as _;
-                let mut stream = std::pin::pin!(stream);
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(token) => {
-                            if tx.send(token).is_err() {
-                                // Receiver dropped — cancel the stream.
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                target: "gpui_starter::streaming",
-                                error = %err,
-                                "token stream produced an error; terminating"
-                            );
-                            // Surface the error as a final chunk so callers
-                            // that render inline still see something, then stop.
-                            let msg = err.to_string();
-                            let _ = tx.send(msg);
-                            break;
-                        }
+    // The stream pump itself: forward tokens into the channel until the
+    // stream ends, errors, or the receiver is dropped.
+    let pump = async move {
+        use futures_util::StreamExt as _;
+        let mut stream = std::pin::pin!(stream);
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(token) => {
+                    if tx.send(token).is_err() {
+                        // Receiver dropped — cancel the stream.
+                        break;
                     }
                 }
-                // tx drops at end of scope → receiver sees channel close.
-            })
-            .await
-            .ok();
+                Err(err) => {
+                    tracing::warn!(
+                        target: "gpui_starter::streaming",
+                        error = %err,
+                        "token stream produced an error; terminating"
+                    );
+                    // Surface the error as a final chunk so callers
+                    // that render inline still see something, then stop.
+                    let msg = err.to_string();
+                    let _ = tx.send(msg);
+                    break;
+                }
+            }
+        }
+        // tx drops at end of scope → receiver sees channel close.
+    };
+
+    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
+        // Native: drive the pump on the shared tokio runtime (streams may need
+        // tokio-driven I/O). The handle is detached so the producer keeps
+        // running independently of this GPUI Task; the GPUI Task just waits
+        // for it. Dropping the receiver cancels the pump.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(runtime) = runtime else {
+                tracing::warn!(
+                    target: "gpui_starter::streaming",
+                    "TokioRuntimeGlobal not set; token stream cannot start"
+                );
+                // tx drops here, closing the channel.
+                return;
+            };
+            runtime.spawn(pump).await.ok();
+        }
+
+        // Wasm: the tokio runtime shim is never driven — poll the pump inline
+        // on GPUI's executor (the browser event loop) instead.
+        #[cfg(target_family = "wasm")]
+        pump.await;
     });
 
     (producer, rx)
@@ -125,45 +139,53 @@ where
 {
     let (tx, rx) = flume::unbounded::<StreamUpdate>();
 
+    #[cfg(not(target_family = "wasm"))]
     let runtime = cx
         .try_global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
         .map(|g| g.0.runtime.clone());
 
-    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
-        let Some(runtime) = runtime else {
-            tracing::warn!(
-                target: "gpui_starter::streaming",
-                "TokioRuntimeGlobal not set; token stream cannot start"
-            );
-            return;
-        };
-
-        runtime
-            .spawn(async move {
-                use futures_util::StreamExt as _;
-                let mut stream = std::pin::pin!(stream);
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(token) => {
-                            if tx.send(StreamUpdate::Token(token)).is_err() {
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                target: "gpui_starter::streaming",
-                                error = %err,
-                                "token stream produced an error; terminating"
-                            );
-                            let _ = tx.send(StreamUpdate::Error(err.to_string()));
-                            return;
-                        }
+    let pump = async move {
+        use futures_util::StreamExt as _;
+        let mut stream = std::pin::pin!(stream);
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(token) => {
+                    if tx.send(StreamUpdate::Token(token)).is_err() {
+                        break;
                     }
                 }
-                let _ = tx.send(StreamUpdate::Done);
-            })
-            .await
-            .ok();
+                Err(err) => {
+                    tracing::warn!(
+                        target: "gpui_starter::streaming",
+                        error = %err,
+                        "token stream produced an error; terminating"
+                    );
+                    let _ = tx.send(StreamUpdate::Error(err.to_string()));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(StreamUpdate::Done);
+    };
+
+    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
+        // Native: drive the pump on the shared tokio runtime (see
+        // `spawn_token_stream`). Wasm: the tokio shim is never driven — poll
+        // the pump inline on GPUI's executor (the browser event loop).
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(runtime) = runtime else {
+                tracing::warn!(
+                    target: "gpui_starter::streaming",
+                    "TokioRuntimeGlobal not set; token stream cannot start"
+                );
+                return;
+            };
+            runtime.spawn(pump).await.ok();
+        }
+
+        #[cfg(target_family = "wasm")]
+        pump.await;
     });
 
     (producer, rx)
@@ -262,38 +284,46 @@ where
 {
     let (tx, rx) = flume::unbounded::<StreamUpdate>();
 
+    #[cfg(not(target_family = "wasm"))]
     let runtime = cx
         .try_global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
         .map(|g| g.0.runtime.clone());
 
-    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
-        let Some(runtime) = runtime else {
-            tracing::warn!(
-                target: "gpui_starter::streaming",
-                "TokioRuntimeGlobal not set; future stream cannot start"
-            );
-            return;
-        };
+    let pump = async move {
+        match future.await {
+            Ok(value) => {
+                let _ = tx.send(StreamUpdate::Token(value));
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "gpui_starter::streaming",
+                    error = %err,
+                    "future stream produced an error"
+                );
+                let _ = tx.send(StreamUpdate::Error(err.to_string()));
+            }
+        }
+        let _ = tx.send(StreamUpdate::Done);
+    };
 
-        runtime
-            .spawn(async move {
-                match future.await {
-                    Ok(value) => {
-                        let _ = tx.send(StreamUpdate::Token(value));
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            target: "gpui_starter::streaming",
-                            error = %err,
-                            "future stream produced an error"
-                        );
-                        let _ = tx.send(StreamUpdate::Error(err.to_string()));
-                    }
-                }
-                let _ = tx.send(StreamUpdate::Done);
-            })
-            .await
-            .ok();
+    let producer = cx.spawn(async move |_cx: &mut AsyncApp| {
+        // Native: drive the pump on the shared tokio runtime (see
+        // `spawn_token_stream`). Wasm: the tokio shim is never driven — poll
+        // the pump inline on GPUI's executor (the browser event loop).
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(runtime) = runtime else {
+                tracing::warn!(
+                    target: "gpui_starter::streaming",
+                    "TokioRuntimeGlobal not set; future stream cannot start"
+                );
+                return;
+            };
+            runtime.spawn(pump).await.ok();
+        }
+
+        #[cfg(target_family = "wasm")]
+        pump.await;
     });
 
     (producer, rx)

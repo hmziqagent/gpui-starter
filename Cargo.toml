@@ -38,8 +38,10 @@ serde_json = "1"
 chrono = "0.4"
 strum = { version = "0.28", features = ["derive"] }
 
-# Async runtime
-tokio = { version = "1", features = ["rt", "sync", "time", "io-util", "net"] }
+# Async runtime. Base feature set only — it must compile on
+# wasm32-unknown-unknown; the native-only `net`/`io-util` features are
+# re-added under [target.'cfg(not(target_family = "wasm"))'.dependencies].
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
@@ -104,6 +106,12 @@ publish = false
 description = "A full-featured desktop application boilerplate built with GPUI (Zed's UI toolkit)"
 repository = "https://github.com/freeoxide/gpui-starter"
 
+[lib]
+# rlib: consumed by the bin and by `cargo test -p gpui-starter --lib`;
+# cdylib: the wasm32-unknown-unknown web artifact post-processed by
+# wasm-bindgen for the browser harness.
+crate-type = ["rlib", "cdylib"]
+
 [features]
 # Enable OTLP export over HTTP/Protobuf for the telemetry module.
 # See src/telemetry.rs for the full list of optional dependencies this pulls in.
@@ -125,7 +133,7 @@ notifications-portal = ["dep:ashpd"]
 [dependencies]
 gpui.workspace = true
 # Version is a range (not `^0.1.4`) so the git override in [patch.crates-io]
-# (branch gpui-pre-0.6 = v0.2.0 + release-profile fix + gpui-pre swap)
+# (branch gpui-pre-0.6 = v0.2.1 wasm support + release-profile fix + gpui-pre swap)
 # actually satisfies this requirement and is applied. With a strict
 # `^0.1.4`-only pin Cargo can silently drop a future patch as
 # `[[patch.unused]]` and build the registry version regardless.
@@ -139,7 +147,6 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-appender = "0.2"
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
@@ -153,8 +160,8 @@ es-fluent-manager-embedded.workspace = true
 strum.workspace = true
 gpui-form.workspace = true
 gpui-form-collection.workspace = true
-user-notify = "0.4.2"
-notify-rust = "4.17.0"
+# user-notify / notify-rust live in the not-wasm target section (D-Bus/mac
+# notification frameworks have no wasm32-unknown-unknown story).
 # Optional: XDG Desktop Portal notification backend (enable with --features notifications-portal).
 # `notification` is required (ashpd gates its whole desktop::notification module behind it).
 # `async-io` (NOT tokio) is required: notify-rust already forces zbus/async-io, and zbus forbids
@@ -175,8 +182,6 @@ futures-util = "0.3"
 tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
 tokio-stream = { version = "0.1", optional = true }
 tempfile = "3.27.0"
-single-instance = "0.3.3"
-interprocess = { version = "2.4.2", features = ["tokio"] }
 reqwest = { version = "0.12.24", default-features = false, features = [
     "cookies",
     "json",
@@ -184,9 +189,6 @@ reqwest = { version = "0.12.24", default-features = false, features = [
     "rustls-tls",
     "stream",
 ] }
-network-interface = "2.0.3"
-keyring = { version = "3.6.3", features = ["apple-native"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
 opentelemetry = "0.24.0"
 tracing-opentelemetry = "0.25.0"
 # Optional: OTLP HTTP exporter for remote telemetry (enable with --features otlp)
@@ -198,8 +200,6 @@ opentelemetry_sdk = { version = "0.24.1", optional = true, features = [
     "rt-tokio",
     "trace",
 ] }
-open = "5.3.2"
-arboard = { version = "3.6.1", features = ["image-data"] }
 rfd = "0.15.4"
 notify = "8.2.0"
 undo = "0.52.0"
@@ -241,6 +241,96 @@ raw-window-handle = "0.6"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Native-only dependencies (no wasm32-unknown-unknown support: raw/local
+# sockets, secret-service/keychain, C libsqlite3, D-Bus/mac notification
+# frameworks). wasm32-unknown-unknown does not match cfg(unix), so the libc
+# entry above is already wasm-excluded too. The source modules consuming
+# these are cfg-fenced separately behind target_family = "wasm" stubs.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+single-instance = "0.3.3"
+interprocess = { version = "2.4.2", features = ["tokio"] }
+network-interface = "2.0.3"
+keyring = { version = "3.6.3", features = ["apple-native"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+notify-rust = "4.17.0"
+user-notify = "0.4.2"
+# `open` hits compile_error!("open is not supported on this platform") and
+# `arboard` has no wasm clipboard backend (its `platform` module is
+# linux/osx/windows only) — both hard-fail on wasm32-unknown-unknown
+# (discovered during area 2's wasm check; same class as the dep gates above).
+open = "5.3.2"
+arboard = { version = "3.6.1", features = ["image-data"] }
+# File appender uses symlink APIs with no wasm32-unknown-unknown story;
+# wasm logs to the console (browser devtools) instead — see
+# src/services/logging.rs.
+tracing-appender = "0.2"
+# Native-only tokio features re-added on top of the workspace base
+# (rt + sync + time): `net` and `io-util` have no wasm implementation.
+tokio = { workspace = true, features = ["io-util", "net"] }
+
+# Web (wasm32-unknown-unknown) dependencies.
+[target.'cfg(target_family = "wasm")'.dependencies]
+# Exact pin: Cargo.lock carries wasm-bindgen 0.2.125 through the gpui web
+# stack (gpui-pre-web), and the wasm-bindgen CLI version used by the web
+# harness MUST match the crate version — keep both at 0.2.125.
+wasm-bindgen = "=0.2.125"
+# std::time::{Instant, SystemTime} COMPILE on wasm32-unknown-unknown but PANIC
+# at runtime ("time not implemented on this platform"). The gpui web stack
+# routes its clocks through web-time (browser performance.now()/Date); the app
+# boot/render paths do the same via src/platform/clock.rs. Version = the one
+# already locked through gpui-pre-web.
+web-time = "1.1.0"
+# chrono's default clock reads std SystemTime and has the same wasm runtime
+# panic; the `wasmbind` feature swaps chrono::Utc::now() to js_sys::Date (both
+# js-sys and wasm-bindgen are already locked). Feature union applies on wasm
+# only — native keeps the default clock.
+chrono = { version = "0.4", features = ["wasmbind"] }
+# Browser API surface for the wasm integration bridges (src/platform/web/):
+# clipboard (navigator.clipboard), hash deep links (location/history),
+# favicon+title (canvas/link), and connectivity (online/offline events).
+# Version-pinned to the pair already locked through the gpui web stack so the
+# feature flags resolve against the SAME web-sys build (no duplicate compile).
+# The feature set is the UNION of every wasm area's needs:
+#   - B (this crate, browser integrations): Clipboard, Window, Navigator,
+#     Location, History, Document, HtmlHeadElement, HtmlLinkElement,
+#     HtmlCanvasElement, CanvasRenderingContext2d, Event, EventTarget,
+#     AddEventListenerOptions
+#   - C (web notifications): Notification, NotificationOptions,
+#     NotificationDirection
+#   - D (SQLite-on-OPFS worker): Worker, WorkerOptions, MessageEvent,
+#     MessagePort, Storage, StorageManager, Blob, Url
+# (Document/Html* transitively enable Element/Node; Window/Clipboard/Node
+# transitively enable EventTarget.)
+web-sys = { version = "=0.3.102", features = [
+    "AddEventListenerOptions",
+    "Blob",
+    "CanvasRenderingContext2d",
+    "Clipboard",
+    "Document",
+    "Event",
+    "EventTarget",
+    "History",
+    "HtmlCanvasElement",
+    "HtmlHeadElement",
+    "HtmlLinkElement",
+    "Location",
+    "MessageEvent",
+    "MessagePort",
+    "Navigator",
+    "Notification",
+    "NotificationDirection",
+    "NotificationOptions",
+    "Storage",
+    "StorageManager",
+    "Url",
+    "Window",
+    "Worker",
+    "WorkerOptions",
+] }
+# Promise/Reflect/JsValue interop for the fire-and-forget clipboard write and
+# the DOM event closures. Exact pin: matches the locked wasm-bindgen =0.2.125.
+js-sys = "=0.3.102"
+
 [build-dependencies]
 es-fluent-build.workspace = true
 
@@ -250,6 +340,12 @@ codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
 
+# Wasm release builds: thin LTO shrinks the (post-wasm-opt) binary noticeably
+# at a modest link-time cost — the wasm release flow (`just wasm-release`) is
+# the main consumer. Native release builds benefit equally.
+[profile.release]
+lto = "thin"
+
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
@@ -257,16 +353,15 @@ gpui-pre-macros = { opt-level = 3 }
 
 [patch.crates-io]
 # gpui-query source toggle: `just gpui-query-local` / `just gpui-query-cratesio`.
-# DEFAULT (git): hmziqagent/gpui-query branch `gpui-pre-0.6` @81b0a33 =
-# 6b8fdd1 (published v0.2.0 + the release-profile AppContext import fix) with
-# ONE root-manifest line swapped to `gpui = { package = "gpui-pre", version =
-# "0.3" }` — no published or upstream version targets gpui-pre yet, so this
+# DEFAULT (git): hmziqagent/gpui-query branch `gpui-pre-0.6` @1449ef2 =
+# v0.2.1 (wasm support, published) merged with the gpui-pre re-point; the
+# workspace root pins `gpui = { package = "gpui-pre", version = "0.3" }` — no published or upstream version targets gpui-pre yet, so this
 # patch carries the release fix AND re-points the crate onto registry gpui-pre
 # (keeping the graph at ONE gpui). Drop this patch once upstream ships
 # gpui-pre support on crates.io. The old 0.1.4-based fix (f84eac4) remains on
 # branch fix/release-appcontext as the Phase-1 rollback pin. Keep exactly ONE
 # line active — a duplicate gpui-query key is a TOML error.
 # >>> gpui-query-local >>>
-gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "81b0a33066fd48ca759aecef83555f9f460ef489" }
+gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "1449ef2" }
 # gpui-query = { path = "/Users/hmziq/fo/gpui-query/crates/gpui-query" }
 # <<< gpui-query-local <<<

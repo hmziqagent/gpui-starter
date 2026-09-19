@@ -17,7 +17,8 @@ use crate::app::theme::set_theme_mode;
 macro_rules! startup_step {
     ($cx:expr, $name:expr, $body:block) => {{
         crate::lifecycle::set_startup_step($name, $cx);
-        let _t = std::time::Instant::now();
+        // clock (not std::time): Instant::now panics at runtime on wasm.
+        let _t = crate::platform::clock::Instant::now();
         $body;
         tracing::info!(
             target: "gpui_starter::startup",
@@ -29,7 +30,30 @@ macro_rules! startup_step {
 }
 
 pub fn init(cx: &mut App) {
-    let startup_start = std::time::Instant::now();
+    // clock (not std::time): Instant::now panics at runtime on wasm.
+    let startup_start = crate::platform::clock::Instant::now();
+
+    // Wasm: the text system starts with an EMPTY font database (no system
+    // fonts in a browser tab); register the embedded fonts BEFORE anything
+    // can lay out text, or the first render panics in `resolve_font`.
+    #[cfg(target_family = "wasm")]
+    {
+        let fonts = crate::app::assets::embedded_font_bytes();
+        let count = fonts.len();
+        if let Err(err) = cx.text_system().add_fonts(fonts) {
+            tracing::error!(
+                target: "gpui_starter::startup",
+                error = %err,
+                "failed to register embedded fonts"
+            );
+        } else {
+            tracing::info!(
+                target: "gpui_starter::startup",
+                count,
+                "embedded fonts registered"
+            );
+        }
+    }
 
     crate::lifecycle::install_panic_hook();
 
@@ -109,8 +133,12 @@ pub fn init(cx: &mut App) {
     };
     set_locale(&locale_to_use, cx);
 
-    // Load extra themes from the themes/ directory (with hot-reload)
+    // Load extra themes from the themes/ directory (with hot-reload).
+    // Native uses the filesystem watcher; wasm has no `watch_dir` (and no
+    // writable themes dir) — themes come from the embedded asset source and
+    // the persisted theme is applied directly if registered.
     let persisted_theme = persisted.theme.clone();
+    #[cfg(not(target_family = "wasm"))]
     if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
         std::path::PathBuf::from(format!("{}/themes", env!("CARGO_MANIFEST_DIR"))),
         cx,
@@ -126,6 +154,15 @@ pub fn init(cx: &mut App) {
     ) {
         tracing::error!("Failed to watch themes directory: {}", err);
         crate::lifecycle::set_startup_error(format!("theme watch failed: {err}"), cx);
+    }
+
+    #[cfg(target_family = "wasm")]
+    if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
+        .themes()
+        .get(persisted_theme.as_str())
+        .cloned()
+    {
+        gpui_component::Theme::global_mut(cx).apply_config(&theme);
     }
 
     if let Some(show) = persisted.scrollbar_show {
@@ -179,38 +216,46 @@ pub fn init(cx: &mut App) {
         crate::session::initialize(cx);
         crate::storage::initialize(cx);
 
-        // Run database migrations after storage is initialized
-        crate::lifecycle::set_startup_step("db_migrations", cx);
-        let migrations_t = std::time::Instant::now();
-        if let Some(snapshot) = cx.try_global::<crate::storage::StorageSnapshot>()
-            && snapshot.available
+        // Run database migrations after storage is initialized.
+        // (SQLite is native-only; wasm storage is always unavailable, so the
+        // snapshot.available guard below never passes there.)
+        #[cfg(not(target_family = "wasm"))]
         {
-            let db_path = std::path::PathBuf::from(snapshot.db_path.clone());
-            match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => match crate::db_migrations::run_migrations(&conn) {
-                    Ok(version) => {
-                        tracing::info!(
-                            target: "gpui_starter::startup",
-                            version,
-                            elapsed_ms = migrations_t.elapsed().as_millis() as u64,
-                            "db_migrations complete"
-                        );
-                    }
+            crate::lifecycle::set_startup_step("db_migrations", cx);
+            let migrations_t = std::time::Instant::now();
+            if let Some(snapshot) = cx.try_global::<crate::storage::StorageSnapshot>()
+                && snapshot.available
+            {
+                let db_path = std::path::PathBuf::from(snapshot.db_path.clone());
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => match crate::db_migrations::run_migrations(&conn) {
+                        Ok(version) => {
+                            tracing::info!(
+                                target: "gpui_starter::startup",
+                                version,
+                                elapsed_ms = migrations_t.elapsed().as_millis() as u64,
+                                "db_migrations complete"
+                            );
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                target: "gpui_starter::startup",
+                                error = %err,
+                                "db_migrations failed"
+                            );
+                            crate::lifecycle::set_startup_error(
+                                format!("migration failed: {err}"),
+                                cx,
+                            );
+                        }
+                    },
                     Err(err) => {
                         tracing::error!(
                             target: "gpui_starter::startup",
                             error = %err,
-                            "db_migrations failed"
+                            "failed to open db for migrations"
                         );
-                        crate::lifecycle::set_startup_error(format!("migration failed: {err}"), cx);
                     }
-                },
-                Err(err) => {
-                    tracing::error!(
-                        target: "gpui_starter::startup",
-                        error = %err,
-                        "failed to open db for migrations"
-                    );
                 }
             }
         }
@@ -230,6 +275,15 @@ pub fn init(cx: &mut App) {
     );
     crate::services::updater::initialize(cx);
     crate::services::updater::check_pending_swap(cx);
+
+    // Wasm: browser integration bridges — hash deep links (router +
+    // history), the favicon/document.title tray-equivalent, and the
+    // navigator.onLine connectivity listeners. Installs after the observed
+    // globals (inbox, connectivity, config) exist; native builds skip it.
+    #[cfg(target_family = "wasm")]
+    startup_step!(cx, "web_integrations", {
+        crate::platform::web::install(cx);
+    });
 
     // Key bindings
     cx.bind_keys([
@@ -307,6 +361,7 @@ pub fn init(cx: &mut App) {
             );
             return;
         }
+        #[cfg(unix)]
         cx.dispatch_action(&Quit);
     });
 

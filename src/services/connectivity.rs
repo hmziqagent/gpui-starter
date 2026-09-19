@@ -1,4 +1,5 @@
 use gpui::{App, BorrowAppContext as _, Global};
+#[cfg(not(target_family = "wasm"))]
 use network_interface::NetworkInterfaceConfig;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +42,9 @@ pub fn snapshot(cx: &App) -> ConnectivitySnapshot {
         .unwrap_or_default()
 }
 
+/// Native: HTTP probe via the shared tokio runtime + interface enumeration on
+/// a blocking thread.
+#[cfg(not(target_family = "wasm"))]
 pub fn check_now(cx: &mut App) {
     let probe_url = snapshot(cx).probe_url;
     let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
@@ -106,6 +110,7 @@ pub fn check_now(cx: &mut App) {
     .detach();
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn read_interfaces() -> Vec<String> {
     network_interface::NetworkInterface::show()
         .map(|ifaces| {
@@ -115,4 +120,31 @@ fn read_interfaces() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Wasm: the browser's reachability signal is `navigator.onLine` (+ the
+/// online/offline listeners installed by `platform::web` at app init — see
+/// `src/platform/web/connectivity.rs`). No interface enumeration exists on
+/// the web platform, so `interfaces` stays empty.
+#[cfg(target_family = "wasm")]
+pub fn check_now(cx: &mut App) {
+    let online = crate::platform::web::connectivity::navigator_online();
+    cx.update_global::<ConnectivitySnapshot, _>(|next, _cx| {
+        next.state = if online {
+            ConnectivityState::Online
+        } else {
+            ConnectivityState::Offline
+        };
+        next.interfaces = Vec::new();
+        next.last_error = if online {
+            None
+        } else {
+            Some("browser reports navigator.onLine = false".to_string())
+        };
+    });
+    tracing::info!(
+        target: "gpui_starter::connectivity",
+        online,
+        "connectivity snapshot updated from navigator.onLine"
+    );
 }

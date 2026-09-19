@@ -16,6 +16,31 @@ clippy:
 check:
     cargo check --workspace --all-features --exclude some-lib-forms
 
+# Web (wasm32-unknown-unknown) support. NIGHTLY is required: the locked
+# wasm_thread 0.3.3 (via the gpui web backend) uses
+# `#![feature(stdarch_wasm_atomic_wait)]`, rejected on stable.
+# Deps are manifest-gated per target in Cargo.toml; the lib source fences
+# are the platform-stubbing work's concern.
+wasm-check:
+    cargo +nightly check --target wasm32-unknown-unknown -p gpui-starter --lib
+
+# Build the web artifact (lib cdylib) for wasm-bindgen post-processing.
+wasm-build:
+    cargo +nightly build --target wasm32-unknown-unknown --lib
+
+# Release web artifact + wasm-bindgen glue into wasm/pkg/ (small .wasm;
+# the full release build of the gpui graph takes tens of minutes).
+# wasm-opt (binaryen) runs inside build.sh when present; precompress then
+# writes .gz/.br siblings + pkg/version.json (drives the SW update cycle).
+wasm-release:
+    ./wasm/build.sh --release
+    node wasm/precompress.mjs
+
+# Build (debug) and serve the wasm harness at http://127.0.0.1:8642/ with the
+# COOP/COEP headers the wasm_thread backend needs. Stop with Ctrl-C.
+wasm-serve:
+    ./wasm/build.sh && ./wasm/serve.sh
+
 test:
     cargo test --workspace --all-features
 

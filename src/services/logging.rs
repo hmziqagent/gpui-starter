@@ -1,4 +1,5 @@
 use gpui::{App, BorrowAppContext as _, Global};
+#[cfg(not(target_family = "wasm"))]
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -13,12 +14,15 @@ pub struct LoggingRuntime {
 
 pub struct LoggingState {
     pub runtime: LoggingRuntime,
+    #[cfg(not(target_family = "wasm"))]
     #[allow(dead_code)]
     guard: Option<WorkerGuard>,
 }
 
 impl Global for LoggingState {}
 
+/// Native: rolling daily file appender + stderr layer.
+#[cfg(not(target_family = "wasm"))]
 pub fn initialize(cx: &mut App) {
     let paths = crate::app_state::paths(cx);
     let log_dir = paths.log_dir.display().to_string();
@@ -34,35 +38,73 @@ pub fn initialize(cx: &mut App) {
                 .with_ansi(false)
                 .with_writer(file_writer),
         )
-        .with(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(
-                    "gpui::window=off"
-                        .parse()
-                        .expect("hardcoded directive is valid"),
-                )
-                .add_directive(
-                    format!("{}=trace", env!("CARGO_PKG_NAME"))
-                        .parse()
-                        .expect("hardcoded directive is valid"),
-                )
-                .add_directive(
-                    "gpui_starter=trace"
-                        .parse()
-                        .expect("hardcoded directive is valid"),
-                )
-                .add_directive(
-                    "user_notify=debug"
-                        .parse()
-                        .expect("hardcoded directive is valid"),
-                )
-                .add_directive(
-                    "notify_rust=debug"
-                        .parse()
-                        .expect("hardcoded directive is valid"),
-                ),
-        )
+        .with(env_filter())
         .try_init();
+
+    initialize_state(cx, log_dir, file_prefix, init_result, Some(guard));
+}
+
+/// Wasm: stderr-only layer (a no-op sink on wasm32-unknown-unknown — no
+/// filesystem appender exists; browser console logging comes from the web
+/// platform init's panic hook instead).
+#[cfg(target_family = "wasm")]
+pub fn initialize(cx: &mut App) {
+    let paths = crate::app_state::paths(cx);
+    let log_dir = paths.log_dir.display().to_string();
+    let file_prefix = "gpui-starter.log".to_string();
+
+    let init_result = tracing_subscriber::registry()
+        // without_time: the fmt layer's default timer reads
+        // std::time::SystemTime on EVERY formatted event, which panics at
+        // runtime on wasm32-unknown-unknown. The browser console already
+        // timestamps each line, so the in-band timestamp is redundant here.
+        .with(tracing_subscriber::fmt::layer().without_time())
+        .with(env_filter())
+        .try_init();
+
+    initialize_state(cx, log_dir, file_prefix, init_result, ());
+}
+
+fn env_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive(
+            "gpui::window=off"
+                .parse()
+                .expect("hardcoded directive is valid"),
+        )
+        .add_directive(
+            format!("{}=trace", env!("CARGO_PKG_NAME"))
+                .parse()
+                .expect("hardcoded directive is valid"),
+        )
+        .add_directive(
+            "gpui_starter=trace"
+                .parse()
+                .expect("hardcoded directive is valid"),
+        )
+        .add_directive(
+            "user_notify=debug"
+                .parse()
+                .expect("hardcoded directive is valid"),
+        )
+        .add_directive(
+            "notify_rust=debug"
+                .parse()
+                .expect("hardcoded directive is valid"),
+        )
+}
+
+fn initialize_state(
+    cx: &mut App,
+    log_dir: String,
+    file_prefix: String,
+    init_result: Result<(), tracing_subscriber::util::TryInitError>,
+    #[cfg(not(target_family = "wasm"))] guard: Option<WorkerGuard>,
+    #[cfg(target_family = "wasm")] _guard: (),
+) {
+    // On wasm the guard parameter is a `()` placeholder (no file appender).
+    #[cfg(target_family = "wasm")]
+    let () = _guard;
 
     let runtime = match init_result {
         Ok(()) => {
@@ -76,7 +118,8 @@ pub fn initialize(cx: &mut App) {
                 enabled: true,
                 log_dir,
                 file_prefix,
-                has_guard: true,
+                // No file appender guard exists on wasm.
+                has_guard: cfg!(not(target_family = "wasm")),
                 last_error: None,
             }
         }
@@ -84,7 +127,7 @@ pub fn initialize(cx: &mut App) {
             enabled: false,
             log_dir,
             file_prefix,
-            has_guard: true,
+            has_guard: cfg!(not(target_family = "wasm")),
             last_error: Some(err.to_string()),
         },
     };
@@ -92,7 +135,8 @@ pub fn initialize(cx: &mut App) {
     crate::capabilities::set(
         "file_logging",
         crate::capabilities::CapabilityStatus {
-            supported: true,
+            // No rolling file appender on wasm — console/devtools only.
+            supported: cfg!(not(target_family = "wasm")),
             enabled: runtime.enabled,
             degraded: runtime.last_error.is_some(),
             reason: runtime
@@ -106,7 +150,8 @@ pub fn initialize(cx: &mut App) {
 
     cx.set_global(LoggingState {
         runtime,
-        guard: Some(guard),
+        #[cfg(not(target_family = "wasm"))]
+        guard,
     });
 }
 
@@ -134,7 +179,10 @@ pub fn shutdown(cx: &mut App) {
         );
         cx.update_global::<LoggingState, _>(|state, _cx| {
             state.runtime.has_guard = false;
-            state.guard = None;
+            #[cfg(not(target_family = "wasm"))]
+            {
+                state.guard = None;
+            }
         });
     }
 }

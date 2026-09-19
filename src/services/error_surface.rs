@@ -42,7 +42,7 @@ pub enum ErrorAction {
     Dismiss,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ErrorRecord {
     pub id: EventId,
     pub occurred_at: AppTimestamp,
@@ -89,22 +89,25 @@ pub fn report(
     // Track the error message so the panic handler can attach it to crash reports.
     crate::lifecycle::track_recent_error(message_str);
 
-    cx.update_global::<ErrorSurfaceState, _>(|state, cx| {
+    cx.update_global::<ErrorSurfaceState, _>(|state, _cx| {
         state.records.insert(0, record);
         if state.records.len() > 200 {
             state.records.truncate(200);
         }
 
-        // Persist to SQLite as a secondary store. The synchronous INSERT is
-        // dispatched to the background executor so the UI thread never blocks
-        // on database I/O (mirrors the storage runtime pattern in
-        // `services/storage/runtime.rs`). Only the in-memory mutation above
-        // must happen synchronously.
-        if let Some(runtime) = cx.try_global::<crate::storage::StorageRuntime>() {
+        // Persist to the storage backend as a secondary store. Only the
+        // in-memory mutation above must happen synchronously — the INSERT is
+        // dispatched to a spawned task so the UI thread never blocks on
+        // database I/O (mirrors the storage runtime pattern in
+        // `services/storage/runtime.rs`). Native runs it on the background
+        // executor (synchronous SQLite); wasm awaits the OPFS worker reply
+        // on the foreground executor (message-passing, non-blocking).
+        if let Some(runtime) = _cx.try_global::<crate::storage::StorageRuntime>() {
             let backend = runtime.backend.clone();
-            cx.background_executor()
+            #[cfg(not(target_family = "wasm"))]
+            _cx.background_executor()
                 .spawn(async move {
-                    if let Err(err) = persist_error(&*backend, &record_clone) {
+                    if let Err(err) = persist_error(&*backend, &record_clone).await {
                         tracing::warn!(
                             target: "gpui_starter::error_surface",
                             error = %err,
@@ -113,6 +116,17 @@ pub fn report(
                     }
                 })
                 .detach();
+            #[cfg(target_family = "wasm")]
+            _cx.spawn(async move |_| {
+                if let Err(err) = persist_error(&*backend, &record_clone).await {
+                    tracing::warn!(
+                        target: "gpui_starter::error_surface",
+                        error = %err,
+                        "failed to persist error to opfs storage"
+                    );
+                }
+            })
+            .detach();
         }
     });
 
@@ -148,28 +162,28 @@ pub fn dismiss(id: EventId, cx: &mut App) {
 }
 
 // ---------------------------------------------------------------------------
-// SQLite persistence (secondary store)
+// Storage persistence (secondary store)
 // ---------------------------------------------------------------------------
 
 /// Persist a single error record to the `error_log` table.
 ///
-/// The `error_log` table migration is defined in `db_migrations` (version 2).
-/// If the table does not exist yet this call will fail and the in-memory store
-/// remains authoritative.
-pub fn persist_error(
+/// The `error_log` table migration is defined in `db_migrations` (version 2)
+/// and mirrored by the wasm OPFS worker. If the table does not exist yet
+/// this call fails and the in-memory store remains authoritative.
+pub async fn persist_error(
     db: &dyn crate::storage::StorageBackend,
     error: &ErrorRecord,
-) -> rusqlite::Result<()> {
-    db.persist_error_record(error)
+) -> Result<(), crate::storage::StorageError> {
+    db.persist_error_record(error).await
 }
 
-/// Load the most recent `limit` error records from SQLite, ordered by
+/// Load the most recent `limit` error records from storage, ordered by
 /// occurrence time descending (newest first).
-pub fn load_error_history(
+pub async fn load_error_history(
     db: &dyn crate::storage::StorageBackend,
     limit: usize,
-) -> rusqlite::Result<Vec<ErrorRecord>> {
-    db.load_error_history(limit)
+) -> Result<Vec<ErrorRecord>, crate::storage::StorageError> {
+    db.load_error_history(limit).await
 }
 
 // ---------------------------------------------------------------------------

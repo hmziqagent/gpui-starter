@@ -7,6 +7,8 @@ use gpui_query::hook::{
 };
 
 use super::super::{HttpFetchKind, PlaygroundPage, PlaygroundUser, QueryPlaygroundPage};
+// Wasm reaches run_http only through `spawn_http_local` (inside actions.rs).
+#[cfg(not(target_family = "wasm"))]
 use super::actions::run_http;
 
 // ---------------------------------------------------------------------------
@@ -283,20 +285,54 @@ impl QueryPlaygroundPage {
             Some((runtime, client)) => (client, runtime),
             None => return, // fetch_http also guards and logs this
         };
+
+        // Wasm: reqwest futures are `!Send` but `use_query` demands `Fn +
+        // Send` fetchers — pre-spawn the single initial fetch on GPUI's local
+        // executor (see `spawn_http_local`) and let each fetcher call take the
+        // `Send` task handle. The query uses no-retry/latest-wins, so exactly
+        // one call is expected; a hypothetical re-call degrades to an error.
+        #[cfg(target_family = "wasm")]
+        let http_task = std::sync::Arc::new(std::sync::Mutex::new(Some(
+            super::actions::spawn_http_local(cx, &client, &runtime, HttpFetchKind::GetJson),
+        )));
+
         let (entity, sub) = use_query(
             QueryOptions::new("playground::http")
                 .cache_policy(CachePolicy::NoCache)
                 .request_policy(RequestPolicy::LatestWins)
                 .retry_policy(RetryPolicy::no_retries()),
             move |signal| {
-                let client = client.clone();
-                let runtime = runtime.clone();
-                async move {
-                    if signal.is_cancelled() {
-                        return Err(QueryError::cancelled("cancelled before send"));
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let client = client.clone();
+                    let runtime = runtime.clone();
+                    async move {
+                        if signal.is_cancelled() {
+                            return Err(QueryError::cancelled("cancelled before send"));
+                        }
+                        let result = run_http(&client, &runtime, HttpFetchKind::GetJson).await?;
+                        Ok(result)
                     }
-                    let result = run_http(&client, &runtime, HttpFetchKind::GetJson).await?;
-                    Ok(result)
+                }
+                #[cfg(target_family = "wasm")]
+                {
+                    // The fetcher is `Fn` (re-callable), so share the cell via
+                    // an Arc clone instead of moving it into the future.
+                    let http_task = http_task.clone();
+                    async move {
+                        if signal.is_cancelled() {
+                            return Err(QueryError::cancelled("cancelled before send"));
+                        }
+                        // Take the handle out before awaiting: the MutexGuard
+                        // is !Send and must not live across the await point.
+                        let task = http_task.lock().unwrap().take();
+                        match task {
+                            Some(task) => task.await,
+                            None => Err(QueryError::response(
+                                "http query refetched; wasm bridge is single-shot",
+                            )),
+                        }
+                    }
                 }
             },
             cx,

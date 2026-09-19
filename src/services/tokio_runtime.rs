@@ -12,6 +12,7 @@ pub struct TokioRuntime {
     pub http_client: reqwest::Client,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl TokioRuntime {
     pub fn new() -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -38,6 +39,52 @@ impl TokioRuntime {
     }
 
     /// Spawn an async task on the tokio runtime.
+    pub fn spawn<F>(&self, f: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.runtime.spawn(f)
+    }
+}
+
+/// Wasm: tokio has no multi-thread runtime and `reqwest`'s wasm
+/// `ClientBuilder` supports neither `timeout`, `cookie_store` nor `redirect`
+/// policies — build the plain client and a `new_current_thread` runtime shim.
+///
+/// NOTE: nothing drives this runtime on wasm (there is no blocking
+/// `block_on`), so futures spawned directly on it will never complete.
+/// Async work on wasm must instead run on GPUI's own executor
+/// (`cx.spawn` / `cx.background_executor()`), which drives futures on the
+/// browser frame loop; the reqwest wasm client works under any executor.
+#[cfg(target_family = "wasm")]
+impl TokioRuntime {
+    pub fn new() -> Self {
+        // No drivers on wasm: this shim is never driven (see the impl note
+        // below), and `enable_all()` constructs the tokio time wheel, whose
+        // setup reads the clock — `tokio::time::Instant` IS
+        // `std::time::Instant`, which panics at runtime on
+        // wasm32-unknown-unknown ("time not implemented on this platform").
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("failed to create tokio runtime shim");
+        tracing::info!(
+            target: "gpui_starter::tokio_runtime",
+            "tokio current-thread runtime shim created (wasm; not driven)"
+        );
+
+        let http_client = reqwest::Client::builder()
+            .build()
+            .expect("failed to build reqwest client");
+
+        Self {
+            runtime: Arc::new(runtime),
+            http_client,
+        }
+    }
+
+    /// Spawn an async task on the tokio runtime. On wasm this runtime is not
+    /// driven (see the impl note above) — prefer GPUI's executor instead.
     pub fn spawn<F>(&self, f: F) -> tokio::task::JoinHandle<F::Output>
     where
         F: std::future::Future + Send + 'static,
