@@ -39,8 +39,9 @@ cargo clippy --workspace --all-features --exclude some-lib-forms
 cargo test --workspace --all-features
 ```
 
-The `justfile` wraps these (`just fmt`, `just clippy`, `just check`,
-`just test`); wasm work additionally gates on `just wasm-check`.
+`just clippy` and `just test` run those commands verbatim. `just fmt` is
+write-mode formatting (sort-derives, rustfmt, taplo, rumdl), not a check;
+`just check` is a separate cargo check pass. Wasm gates on `just wasm-check`.
 
 - Match existing patterns: imports, module layout, error handling, naming.
   Read the neighboring files first.
