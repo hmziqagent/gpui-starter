@@ -45,7 +45,7 @@ jobs:
       GPUI_UPDATE_MANIFEST_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/manifest.json"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Disable Spotlight indexing
         # Spotlight (mds) racing file changes makes `hdiutil create` fail with
@@ -58,7 +58,7 @@ jobs:
           # with lipo in create-release-app.sh so one .app runs on both.
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -190,7 +190,7 @@ jobs:
           done
 
       - name: Upload DMG artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-dmgs
           path: target/release/GPUI-Starter-${{ steps.version.outputs.value }}*.dmg
@@ -209,7 +209,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - arch: aarch64
             runner: ubuntu-24.04-arm
@@ -226,14 +226,14 @@ jobs:
       GPUI_UPDATE_MANIFEST_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/manifest.json"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         run: ./scripts/install-linux-deps.sh
 
       - uses: dtolnay/rust-toolchain@nightly
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -318,7 +318,7 @@ jobs:
           echo "name=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gpui-starter-${{ steps.version.outputs.value }}-${{ matrix.arch }}-linux
           path: stage/${{ steps.tarball.outputs.path }}
@@ -330,10 +330,10 @@ jobs:
   publish-release:
     name: Publish Release
     needs: [build-macos, build-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Determine version
         id: version
@@ -350,14 +350,14 @@ jobs:
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Download DMG artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           # macos-dmgs bundles the universal + slim arm64/x86_64 DMGs.
           name: macos-dmgs
           path: ./artifacts
 
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           # merge-multiple so both arches land flat in ./artifacts.
           pattern: gpui-starter-${{ steps.version.outputs.value }}-*-linux
@@ -365,7 +365,7 @@ jobs:
           path: ./artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.value }}
           name: v${{ steps.version.outputs.value }}
@@ -384,7 +384,7 @@ jobs:
         run: |
           GITHUB_REPO="${{ github.repository }}"
 
-          # Install the Python signing dependency. ubuntu-latest does NOT ship
+          # Install the Python signing dependency. ubuntu-24.04 does NOT ship
           # the `cryptography` module, so without this Ed25519 signing silently
           # no-ops (see scripts/generate-manifest.sh). Gated on the secret so
           # non-signing runs are a no-op.

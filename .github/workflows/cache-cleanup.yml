@@ -1,0 +1,37 @@
+name: Cache Cleanup
+
+on:
+  schedule:
+    # Weekly, Monday 04:17 UTC — off-peak and off the round minute. Sweeps
+    # PR/tag/stale-branch caches before they can push the 10 GB quota into
+    # LRU-evicting the warm master caches.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List stale caches without deleting them"
+        required: false
+        type: boolean
+        default: false
+
+# Deleting caches requires actions:write.
+permissions:
+  actions: write
+
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Purge stale caches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Delete stale GitHub Actions caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: ./scripts/cleanup-gha-caches.sh
