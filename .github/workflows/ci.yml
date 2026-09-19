@@ -30,13 +30,18 @@ jobs:
     name: Check
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@nightly
 
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v2-macos"
+          # PR runs RESTORE the base (master) cache — that half is default
+          # GitHub behavior — but never save: PR-scoped entries are visible
+          # only to that one PR and were what kept filling the 10 GB cache
+          # quota. Master-only saves keep exactly one warm line of caches.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Cargo check (dev)
         run: cargo check
@@ -70,7 +75,7 @@ jobs:
     name: Clippy
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -79,6 +84,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v2-macos"
+          # Master-only saves; PRs restore only (see the check job note).
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
@@ -87,7 +94,7 @@ jobs:
     name: Formatting
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -100,12 +107,15 @@ jobs:
   # Linux lane: compiles the cfg(target_os = "linux")-gated code paths
   # (compositor, layer_shell, detached/session_env) that the macOS-primary
   # lane never sees. Same scoped-`test` policy, same codegen discipline.
+  # Runners pinned to ubuntu-24.04: ubuntu-latest flips to Ubuntu 26 on
+  # 2026-10-19 (actions/runner-images#14748), which would change system
+  # deps under us mid-quarter.
   # ---------------------------------------------------------------------
   check-linux:
     name: Check (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         run: ./scripts/install-linux-deps.sh
@@ -119,6 +129,8 @@ jobs:
           # flags (x11/wayland) and a shared key would be poisoned across
           # runners.
           prefix-key: "v2-linux"
+          # Master-only saves; PRs restore only (see the check job note).
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Cargo check (dev)
         run: cargo check
@@ -128,9 +140,9 @@ jobs:
 
   clippy-linux:
     name: Clippy (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         run: ./scripts/install-linux-deps.sh
@@ -142,6 +154,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v2-linux"
+          # Master-only saves; PRs restore only (see the check job note).
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
@@ -156,30 +170,47 @@ jobs:
   # ---------------------------------------------------------------------
   test:
     name: Test (lib, Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Full codegen of the gpui dependency graph. A warm rust-cache + sccache
     # keeps this well under 30 min, but ANY Cargo.lock change (dep bump, new
     # pin) invalidates the key and the cold rebuild needs 60-100+ min at
     # CARGO_BUILD_JOBS=2 — the original 30-min cap killed exactly that run
     # (PR #6's first attempt: cancelled at 30m17s with rustc mid-compile).
     timeout-minutes: 120
+    env:
+      # RUSTC_WRAPPER must stay identical on master and PR runs: cargo mixes
+      # the wrapper into its build fingerprints, so flipping it per-event
+      # would invalidate the target/ dir restored from the master rust-cache.
+      RUSTC_WRAPPER: sccache
+      # SCCACHE_GHA_ENABLED is what persists sccache hits across runs — the
+      # sccache-action only installs the binary (it does NOT set this itself;
+      # before this was set, sccache silently used a throwaway per-run disk
+      # cache and cached nothing). Backend writes are master-only so PR runs
+      # never create cache entries; PR speed comes from the restored target/
+      # dir instead. Reads on PRs would work (base-branch scope) but every
+      # compile miss would be written back as PR-scoped quota junk.
+      SCCACHE_GHA_ENABLED: ${{ github.ref == 'refs/heads/master' && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         run: ./scripts/install-linux-deps.sh
 
       - uses: dtolnay/rust-toolchain@nightly
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: Swatinem/rust-cache@v2
         with:
           # Dedicated key: the test profile produces different artifacts than
           # check/clippy — a shared key would poison across jobs (cf. aaa591d).
           prefix-key: "v2-linux-test"
+          # Master-only saves; PRs restore only (see the check job note).
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          # Save even when tests fail: the cold rebuild noted above
+          # (60-100+ min after any Cargo.lock change) shouldn't restart from
+          # zero because one test flaked mid-run.
+          cache-on-failure: true
 
       - name: Run scoped lib tests
-        env:
-          RUSTC_WRAPPER: sccache
         run: cargo test -p gpui-starter --lib
