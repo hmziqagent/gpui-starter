@@ -1,27 +1,17 @@
 //! Wasm notification backend: the browser Web Notifications API behind the
-//! shared [`NotificationBackend`] trait.
+//! shared [`NotificationBackend`] trait. Browsers render `new Notification(...)`
+//! as a real OS notification; the installed-PWA push story is out of scope
+//! (there is no server).
 //!
-//! Desktop browsers render `new Notification(...)` as a real OS notification
-//! with no service worker involved — the API surface used here is exactly
-//! `Notification.permission` / `requestPermission()` / the constructor.
-//! (The installed-PWA story — iOS banner permissions, push — additionally
-//! rides on the harness manifest + service worker; real PushManager
-//! subscriptions are out of scope, there is no server.)
+//! Degrade paths, all explicit: browsers without `window.Notification` fail in
+//! [`new`]; ungranted permission fails fast in `send` (avoiding the
+//! constructor's bare `TypeError: Illegal constructor`); a rejected
+//! `requestPermission` promise maps to [`NotificationPermissionState::Unavailable`].
 //!
-//! Degrade paths, all explicit:
-//! - Browsers without `window.Notification` (very old): [`new`] returns
-//!   `Err` and the service keeps the failing [`WasmStubBackend`] secondary —
-//!   every send falls through to the in-app toast + inbox policy.
-//! - Permission not granted: `send` fails fast with a readable reason
-//!   instead of the constructor's bare `TypeError: Illegal constructor`.
-//! - `requestPermission` promise rejection: mapped to
-//!   [`NotificationPermissionState::Unavailable`] with the JS error message.
-//!
-//! Send-future note: the trait's `#[async_trait]` futures must be `Send`, so
-//! no `JsValue` (including a pending promise handle) may be held across an
-//! await point. All JS interop therefore stays inside synchronous helpers
-//! and crosses the await boundary only through a `flume` channel of plain
-//! `String`s.
+//! Send-future note: `#[async_trait]` futures must be `Send`, so no `JsValue`
+//! may be held across an await. All JS interop stays inside synchronous
+//! helpers and crosses the await boundary only through a `flume` channel of
+//! plain `String`s.
 
 use async_trait::async_trait;
 use js_sys::Reflect;
@@ -172,10 +162,9 @@ fn notification_constructor() -> Option<JsValue> {
 
 /// Read `Notification.permission` (`"granted" | "denied" | "default"`).
 ///
-/// web-sys 0.3.102's typed `Notification::permission()` is gated behind the
-/// `NotificationPermission` feature, which is not in the crate's enabled
-/// web-sys feature union — `Reflect::get` on the constructor reads the same
-/// property with zero extra features.
+/// web-sys's typed `Notification::permission()` is gated behind a feature not
+/// in this crate's web-sys union; `Reflect::get` reads the same property with
+/// zero extra features.
 fn permission_string() -> Option<String> {
     let constructor = notification_constructor()?;
     Reflect::get(&constructor, &JsValue::from_str("permission"))
@@ -184,16 +173,13 @@ fn permission_string() -> Option<String> {
 }
 
 /// Kick off `Notification.requestPermission()` and return the channel its
-/// resolution lands on; `None` when the API is unavailable or the call
-/// itself threw.
+/// resolution lands on; `None` when the API is unavailable or the call threw.
 ///
-/// The Promise is bridged with two `Closure`s + `then2` (fulfilled/rejected)
-/// instead of `wasm-bindgen-futures` (not a dependency of this crate): all
-/// JS handles stay inside this synchronous helper so the awaiting future
-/// only ever holds the `Send` `flume::Receiver` (see the module docs). The
-/// closures are intentionally leaked (house pattern) — they must outlive
-/// this frame until the promise settles; the leaked senders also keep the
-/// channel alive so the receiver never observes a disconnect.
+/// The Promise is bridged with two `Closure`s + `then2` (wasm-bindgen-futures
+/// is not a dependency); all JS handles stay inside this synchronous helper so
+/// the awaiting future only holds the `Send` `flume::Receiver`. The closures
+/// are leaked (house pattern) so they outlive the frame; the leaked senders
+/// also keep the channel alive so the receiver never sees a disconnect.
 fn spawn_permission_request() -> Option<flume::Receiver<Result<String, String>>> {
     notification_constructor()?;
     let promise = match web_sys::Notification::request_permission() {

@@ -23,28 +23,18 @@ pub fn initialize(cx: &mut App) {
         degraded_reason = ?snapshot.degraded_reason,
         "installing native notification global state"
     );
+    let degraded = snapshot.degraded_reason.is_some();
+    let reason = snapshot.degraded_reason.clone();
+    let last_error = snapshot.last_backend_error.clone();
     cx.set_global(NativeNotificationState { service, snapshot });
-    let degraded = cx
-        .global::<NativeNotificationState>()
-        .snapshot
-        .degraded_reason
-        .is_some();
     crate::capabilities::set(
         "native_notifications",
         crate::capabilities::CapabilityStatus {
             supported: true,
             enabled: true,
             degraded,
-            reason: cx
-                .global::<NativeNotificationState>()
-                .snapshot
-                .degraded_reason
-                .clone(),
-            last_error: cx
-                .global::<NativeNotificationState>()
-                .snapshot
-                .last_backend_error
-                .clone(),
+            reason,
+            last_error,
         },
         cx,
     );
@@ -114,19 +104,14 @@ pub fn refresh_permission_state(cx: &mut App) {
     .detach();
 }
 
-/// Probe the FreeDesktop notification daemon once at startup and annotate the
-/// snapshot so Settings can show "no daemon" immediately — instead of only
-/// revealing it after the first failed send.
+/// Probe the FreeDesktop notification daemon once at startup so Settings can
+/// show "no daemon" immediately instead of after the first failed send.
 ///
 /// `notify_rust::get_server_information` / `get_capabilities` are synchronous
-/// wrappers over `zbus::block_on` (async-io) that PARK the calling thread, so
-/// they run on the tokio runtime's blocking pool — never on the gpui main/UI
-/// thread. The send path is unaffected: NotifyRust stays the active backend and
-/// still returns a real D-Bus `Err` on no-daemon (firing the in-app fallback).
+/// wrappers over `zbus::block_on` that park the calling thread, so they run on
+/// the tokio blocking pool — never on the GPUI/UI thread.
 pub fn refresh_daemon_state(cx: &mut App) {
-    // Linux-only: notify-rust's get_server_information / get_capabilities (and
-    // the whole FreeDesktop D-Bus daemon concept) are not compiled on macOS,
-    // which uses UNUserNotificationCenter. On other platforms this is a no-op.
+    // Linux-only: macOS uses UNUserNotificationCenter and has no D-Bus daemon.
     #[cfg(target_os = "linux")]
     {
         let Some(runtime) = crate::services::tokio_runtime::handle(cx) else {

@@ -71,11 +71,8 @@ struct DesktopActionsInner {
 impl Global for DesktopActionsState {}
 
 pub fn initialize(cx: &mut App) {
-    // arboard (clipboard) has no wasm backend — on wasm the async
-    // `navigator.clipboard` API is used instead (fire-and-forget; see
-    // src/platform/web/clipboard.rs); rfd's FileDialog and the `open` crate
-    // are compiled out on wasm — report those as unavailable, keep the
-    // (never-firing) notify watchers working.
+    // Wasm swaps in `navigator.clipboard` (see platform::web::clipboard) and
+    // compiles out rfd/`open`; the notify watchers simply never fire there.
     #[cfg(not(target_family = "wasm"))]
     let clipboard_ok = Clipboard::new().is_ok();
     #[cfg(target_family = "wasm")]
@@ -110,10 +107,8 @@ pub fn snapshot(cx: &App) -> DesktopActionsSnapshot {
 }
 
 pub fn copy_text(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
-    // Wasm: arboard has no browser backend — write through the async
-    // `navigator.clipboard.writeText` API instead. The Promise result cannot
-    // be observed from this sync signature, so the write is fire-and-forget
-    // (rejections are logged by the bridge) and success is reported eagerly.
+    // Wasm: the Promise result of `navigator.clipboard.writeText` can't be
+    // observed from this sync signature — the write is fire-and-forget.
     #[cfg(target_family = "wasm")]
     {
         crate::platform::web::clipboard::write_text_fire_and_forget(text);
@@ -150,21 +145,46 @@ pub fn open_config_folder(cx: &mut App) -> Result<(), DesktopActionError> {
 }
 
 pub fn open_url(url: &str, cx: &mut App) -> Result<(), DesktopActionError> {
+    // Only web URLs are ever expected here; rejecting other schemes keeps
+    // `xdg-open` from being aimed at files, or custom/fictional handlers.
+    let scheme_ok = {
+        let (scheme, rest) = url.split_once(':').unwrap_or(("", ""));
+        !rest.is_empty() && matches!(scheme, "http" | "https")
+    };
     #[cfg(target_family = "wasm")]
     {
         // No `open` crate on wasm (it hits compile_error); a future web entry
         // could use window.open here instead.
-        let result = Err(DesktopActionError::Unavailable);
+        let result = if scheme_ok {
+            Err(DesktopActionError::Unavailable)
+        } else {
+            Err(DesktopActionError::OpenUrlFailed {
+                url: url.to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "only http/https URLs are supported",
+                ),
+            })
+        };
         update_result("open_url", result.as_ref().err().map(|e| e.to_string()), cx);
-        let _ = url;
         return result;
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        let result = open::that_detached(url).map_err(|source| DesktopActionError::OpenUrlFailed {
-            url: url.to_string(),
-            source,
-        });
+        let result = if scheme_ok {
+            open::that_detached(url).map_err(|source| DesktopActionError::OpenUrlFailed {
+                url: url.to_string(),
+                source,
+            })
+        } else {
+            Err(DesktopActionError::OpenUrlFailed {
+                url: url.to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "only http/https URLs are supported",
+                ),
+            })
+        };
         update_result("open_url", result.as_ref().err().map(|e| e.to_string()), cx);
         result
     }
@@ -200,10 +220,8 @@ pub fn save_file(cx: &mut App) -> Option<PathBuf> {
     pick_with_dialog("save_file", None, cx)
 }
 
-/// Shared body of the file-dialog helpers.
-///
-/// Wasm: `rfd::FileDialog` does not exist on wasm32-unknown-unknown — the
-/// dialog helpers report "unavailable" and return `None`.
+/// Shared body of the file-dialog helpers. `rfd::FileDialog` does not exist on
+/// wasm, so the dialog helpers report "unavailable" and return `None` there.
 fn pick_with_dialog(action: &'static str, _file: Option<PathBuf>, cx: &mut App) -> Option<PathBuf> {
     #[cfg(target_family = "wasm")]
     {
@@ -227,7 +245,7 @@ fn pick_with_dialog(action: &'static str, _file: Option<PathBuf>, cx: &mut App) 
     }
 }
 
-pub fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
+fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
     let state = cx
         .try_global::<DesktopActionsState>()
         .ok_or(DesktopActionError::Unavailable)?;
@@ -297,85 +315,7 @@ pub fn watch_config_dir(cx: &mut App) -> Result<u64, DesktopActionError> {
 /// channel; a gpui task `recv`s the first event, sleeps 500ms to let an
 /// editor's write burst settle, drains any remaining events, then triggers a
 /// window refresh so the UI picks up the new config.
-pub fn watch_config_dir_reactive(cx: &mut App) -> Result<u64, DesktopActionError> {
-    let state = cx
-        .try_global::<DesktopActionsState>()
-        .ok_or(DesktopActionError::Unavailable)?;
-    let path = crate::app_state::paths(cx).config_dir.clone();
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| DesktopActionError::LockPoisoned)?;
-    let watcher_id = inner.next_watcher_id;
-    inner.next_watcher_id += 1;
-
-    let (tx, rx) = flume::bounded::<()>(64);
-    let mut watcher =
-        notify::recommended_watcher(move |result: notify::Result<notify::Event>| match result {
-            Ok(event) => {
-                tracing::debug!(
-                    target: "gpui_starter::desktop_actions",
-                    watcher_id,
-                    kind = ?event.kind,
-                    paths = ?event.paths,
-                    "config watch event"
-                );
-                // Best-effort enqueue; a full channel just means a refresh is
-                // already pending — the burst will be coalesced anyway.
-                let _ = tx.try_send(());
-            }
-            Err(err) => tracing::warn!(
-                target: "gpui_starter::desktop_actions",
-                watcher_id,
-                error = %err,
-                "config watch event error"
-            ),
-        })
-        .map_err(DesktopActionError::from)?;
-    watcher
-        .watch(&path, RecursiveMode::NonRecursive)
-        .map_err(DesktopActionError::from)?;
-    inner.watchers.insert(watcher_id, watcher);
-    let active_watchers = inner.watchers.len();
-    drop(inner);
-    cx.update_global::<DesktopActionsState, _>(|state, _cx| {
-        state.snapshot.active_watchers = active_watchers;
-        state.snapshot.last_error = None;
-    });
-
-    // Coalescing task: wait for the first event, settle, drain, refresh.
-    let bg = cx.background_executor().clone();
-    cx.spawn(async move |cx| {
-        loop {
-            // Block until the first event of a new burst arrives.
-            if rx.recv_async().await.is_err() {
-                // Sender half dropped (watcher unregistered): stop.
-                break;
-            }
-            // Let an editor's multi-write burst settle, then drain the rest.
-            bg.timer(std::time::Duration::from_millis(500)).await;
-            while rx.try_recv().is_ok() {}
-            tracing::info!(
-                target: "gpui_starter::desktop_actions",
-                "config change burst settled; refreshing windows"
-            );
-            cx.update(|cx| {
-                cx.refresh_windows();
-            });
-        }
-    })
-    .detach();
-
-    tracing::info!(
-        target: "gpui_starter::desktop_actions",
-        watcher_id,
-        path = %path.display(),
-        "reactive config watcher registered"
-    );
-    Ok(watcher_id)
-}
-
-pub fn unwatch_path(id: u64, cx: &mut App) -> bool {
+fn unwatch_path(id: u64, cx: &mut App) -> bool {
     let Some(state) = cx.try_global::<DesktopActionsState>() else {
         return false;
     };

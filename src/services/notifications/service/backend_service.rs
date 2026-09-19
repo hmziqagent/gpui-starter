@@ -204,11 +204,8 @@ impl NotificationService {
 
         if let Some(primary) = &self.primary {
             tracing::debug!(target: LOG, backend = %primary.kind(), "attempting primary notification send");
-            // catch_unwind: a panic inside a backend (e.g. notify-rust's
-            // action-signal `.unwrap()` chain, reached only after a successful
-            // show) would otherwise abort the whole send task and bypass the
-            // secondary fallback. Convert a panic into a regular error so the
-            // fallback is always attempted.
+            // catch_unwind: a panicking backend must not abort the send task —
+            // the panic becomes a regular error so the fallback is attempted.
             match AssertUnwindSafe(primary.send(&request))
                 .catch_unwind()
                 .await

@@ -33,11 +33,8 @@ pub fn i18n() -> &'static EmbeddedI18n {
 
 /// Localizes a message `id` from this crate's fallback Fluent bundle.
 ///
-/// es-fluent 0.18 keys lookups by a fully scoped
-/// [`StaticFluentMessageKey`][es_fluent::registry::StaticFluentMessageKey];
-/// for this package both the owner and domain default to `CARGO_PKG_NAME`
-/// (no domain override in `i18n.toml`), mirroring what the derive macros
-/// emit for the same messages.
+/// es-fluent 0.18 keys lookups by a fully scoped key; for this package both
+/// owner and domain default to `CARGO_PKG_NAME` (no override in `i18n.toml`).
 pub fn localize<'a>(id: &'static str, args: Option<&'a FluentArgs<'a>>) -> String {
     let domain = StaticFluentDomain::from_package_name(env!("CARGO_PKG_NAME"));
     let key = StaticFluentMessageKey::new(
@@ -52,9 +49,8 @@ pub fn localize_message<T: FluentMessage + ?Sized>(message: &T) -> String {
     i18n().localize_message(message)
 }
 
-/// Detect the system locale using the `sys-locale` crate. Returns a
-/// normalised language identifier string (e.g. `"en-US"`, `"zh-CN"`).
-/// Falls back to `"en"` when detection fails.
+/// Detect the system locale via `sys-locale` (e.g. `"en-US"`), falling back
+/// to `"en"` when detection fails.
 pub fn detect_system_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en".to_string())
 }

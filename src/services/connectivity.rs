@@ -47,8 +47,18 @@ pub fn snapshot(cx: &App) -> ConnectivitySnapshot {
 #[cfg(not(target_family = "wasm"))]
 pub fn check_now(cx: &mut App) {
     let probe_url = snapshot(cx).probe_url;
-    let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
-        .expect("tokio runtime global must be installed before connectivity probe");
+    // Degrade instead of panicking: init order or wasm shouldn't take down the UI.
+    let Some((rt, client)) = crate::services::tokio_runtime::runtime_and_client(cx) else {
+        cx.update_global::<ConnectivitySnapshot, _>(|next, _cx| {
+            next.state = ConnectivityState::Unknown;
+            next.last_error = Some("tokio runtime not installed; probe skipped".to_string());
+        });
+        tracing::warn!(
+            target: "gpui_starter::connectivity",
+            "tokio runtime global not set; connectivity probe skipped"
+        );
+        return;
+    };
 
     cx.spawn(async move |cx| {
         // Run the HTTP connectivity probe on the tokio runtime.
