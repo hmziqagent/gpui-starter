@@ -1,14 +1,5 @@
-//! Async-stream-to-GPUI plumbing.
-//!
-//! Bridges an async [`Stream`] of `Result<String, _>` items into a
-//! [`flume::Receiver`] that GPUI view code can poll from a [`gpui::Task`].
-//! The stream is driven on the shared tokio runtime global
-//! ([`crate::services::tokio_runtime::TokioRuntimeGlobal`]); on wasm, where
-//! that runtime is an undriven shim, the pump is polled inline on GPUI's
-//! executor instead.
-//!
-//! The channel is bounded: a hostile or merely fast producer applies
-//! backpressure instead of growing memory while the UI is slow to drain.
+//! Async-stream-to-GPUI plumbing: drive an async [`Stream`] of tokens into a
+//! [`flume::Receiver`] on the shared tokio runtime (on wasm: GPUI's executor).
 
 use flume::Receiver;
 use futures_util::Stream;
@@ -17,20 +8,8 @@ use gpui::{App, AsyncApp, Context, Task, WeakEntity};
 /// Upper bound on buffered tokens before the producer waits on the consumer.
 const CHANNEL_CAPACITY: usize = 1024;
 
-/// Drive an async stream of tokens into a [`flume::Receiver`] using gpui-starter's
-/// shared tokio runtime global.
-///
-/// Returns the receiver plus a tokio [`JoinHandle`](tokio::task::JoinHandle)-like
-/// task that the caller may keep alive (or drop to let the producer run to
-/// completion in the background). Closing the receiver (dropping it) cancels the
-/// producer: the send loop detects the closed channel and exits.
-///
-/// `stream` must be `Send + 'static` and yield `Result<String, E>` where `E:
-/// std::fmt::Display`. Errors are logged and converted to a final token chunk;
-/// the caller renders it inline.
-///
-/// If the tokio runtime global is missing the function logs a warning and
-/// returns a producer that immediately closes the channel.
+/// Drive an async stream of tokens into a bounded [`flume::Receiver`] on the
+/// shared tokio runtime. Dropping the receiver cancels the producer.
 pub fn spawn_token_stream<S, E>(cx: &App, stream: S) -> (Task<()>, Receiver<String>)
 where
     S: Stream<Item = Result<String, E>> + Send + 'static,
@@ -68,15 +47,8 @@ where
     (producer_task(cx, pump), rx)
 }
 
-/// Spawn a polling loop that drains a `Receiver<String>` token channel and
-/// forwards each token (plus completion detection via channel close) to a
-/// caller-supplied callback that mutates the owning view.
-///
-/// `on_token` is invoked on the GPUI thread (inside `cx.update`) for every
-/// token. The returned [`Task`] keeps the poll loop alive; dropping or replacing
-/// it cancels polling — the canonical "cancel by replacing the Task" idiom.
-///
-/// The `weak` handle lets the loop short-circuit when the owning view is gone.
+/// Drain a token channel on the GPUI thread, invoking `on_token` per token;
+/// the returned [`Task`] cancels polling when dropped or replaced.
 pub fn spawn_token_poller<T, F>(
     rx: Receiver<String>,
     weak: WeakEntity<T>,
@@ -112,8 +84,7 @@ where
 }
 
 /// Run `pump` on the shared tokio runtime (native) or inline on GPUI's
-/// executor (wasm, where the tokio shim is never driven). Dropping the pump's
-/// channel receiver cancels it.
+/// executor (wasm, where the tokio shim is never driven).
 fn producer_task(cx: &App, pump: impl Future<Output = ()> + Send + 'static) -> Task<()> {
     #[cfg(not(target_family = "wasm"))]
     {

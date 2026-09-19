@@ -132,10 +132,8 @@ fn read_interfaces() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Wasm: the browser's reachability signal is `navigator.onLine` (+ the
-/// online/offline listeners installed by `platform::web` at app init — see
-/// `src/platform/web/connectivity.rs`). No interface enumeration exists on
-/// the web platform, so `interfaces` stays empty.
+/// Wasm: the browser's reachability signal is `navigator.onLine` (listeners
+/// installed by `platform::web`); no interface enumeration exists on the web.
 #[cfg(target_family = "wasm")]
 pub fn check_now(cx: &mut App) {
     let online = crate::platform::web::connectivity::navigator_online();

@@ -31,10 +31,8 @@ pub fn i18n() -> &'static EmbeddedI18n {
     })
 }
 
-/// Localizes a message `id` from this crate's fallback Fluent bundle.
-///
-/// es-fluent 0.18 keys lookups by a fully scoped key; for this package both
-/// owner and domain default to `CARGO_PKG_NAME` (no override in `i18n.toml`).
+/// Localizes a message `id` from this crate's fallback Fluent bundle; es-fluent
+/// 0.18 scopes the key by owner/domain, both defaulting to `CARGO_PKG_NAME`.
 pub fn localize<'a>(id: &'static str, args: Option<&'a FluentArgs<'a>>) -> String {
     let domain = StaticFluentDomain::from_package_name(env!("CARGO_PKG_NAME"));
     let key = StaticFluentMessageKey::new(

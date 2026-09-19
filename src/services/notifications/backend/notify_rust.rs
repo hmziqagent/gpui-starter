@@ -83,9 +83,8 @@ impl NotificationBackend for NotifyRustBackend {
 
         #[cfg(target_os = "linux")]
         {
-            // show_async() is a real async future driven by zbus's own executor
-            // — no blocking, safe to await here. The sync show() would block_on
-            // (async-io) and park the executor that polls this async trait.
+            // show_async() is driven by zbus's own executor; the sync show()
+            // would block_on (async-io) and park the executor polling this trait.
             match notification.show_async().await {
                 Ok(_) => {
                     tracing::info!(target: LOG, "notify-rust send succeeded");

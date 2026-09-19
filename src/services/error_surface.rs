@@ -84,9 +84,8 @@ pub fn report(
         state.records.insert(0, record);
         state.records.truncate(MAX_RECORDS);
 
-        // The in-memory mutation must stay synchronous; the INSERT is dispatched
-        // so the UI thread never blocks on database I/O (native: synchronous
-        // SQLite on the background executor; wasm: awaits the OPFS worker reply).
+        // The in-memory mutation stays synchronous; the INSERT is dispatched so
+        // the UI thread never blocks on database I/O (native: bg executor, wasm: OPFS).
         if let Some(runtime) = _cx.try_global::<crate::storage::StorageRuntime>() {
             let backend = runtime.backend.clone();
             #[cfg(not(target_family = "wasm"))]
@@ -166,10 +165,6 @@ fn scrub_home_with(text: &str, home: &str) -> String {
         text.replace(home, "~")
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[path = "error_surface.test.rs"]

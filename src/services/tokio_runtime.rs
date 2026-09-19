@@ -2,12 +2,8 @@ use std::sync::Arc;
 
 use gpui::{App, Global};
 
-/// Dedicated tokio runtime for I/O-bound work (HTTP, etc.).
-///
-/// GPUI's executor uses its own scheduler (GCD on macOS) and is **not** a tokio
-/// runtime. Any code that depends on tokio — `reqwest`, `tokio::net`, `tokio::time`
-/// — must run inside this runtime via `runtime.spawn(...)` on the held
-/// [`tokio::runtime::Runtime`].
+/// Dedicated tokio runtime for I/O-bound work: GPUI's executor is not a tokio
+/// runtime, so tokio-dependent code must run via `runtime.spawn(...)` here.
 pub struct TokioRuntime {
     pub runtime: Arc<tokio::runtime::Runtime>,
     pub http_client: reqwest::Client,
@@ -40,14 +36,8 @@ impl TokioRuntime {
     }
 }
 
-/// Wasm: tokio has no multi-thread runtime and `reqwest`'s wasm
-/// `ClientBuilder` supports neither `timeout`, `cookie_store` nor `redirect`
-/// policies — build the plain client and a `new_current_thread` runtime shim.
-///
-/// NOTE: nothing drives this runtime on wasm, so futures spawned on it never
-/// complete; async work must run on GPUI's own executor. `enable_all()` is
-/// omitted because its time-wheel setup reads the clock, which panics on
-/// wasm32-unknown-unknown.
+/// Wasm shim: an undriven current-thread runtime (no `enable_all()` — its clock
+/// setup panics on wasm) plus a plain reqwest client. Use GPUI's executor.
 #[cfg(target_family = "wasm")]
 impl TokioRuntime {
     pub fn new() -> Self {
@@ -81,18 +71,15 @@ pub struct TokioRuntimeGlobal(pub TokioRuntime);
 
 impl Global for TokioRuntimeGlobal {}
 
-/// Borrow the shared tokio runtime handle, if a [`TokioRuntimeGlobal`] has been
-/// installed. Returns `None` when the runtime is absent (callers should
-/// degrade gracefully — e.g. log + return an early result).
+/// Borrow the shared tokio runtime handle, or `None` when absent (callers
+/// should degrade gracefully).
 pub fn handle(cx: &App) -> Option<Arc<tokio::runtime::Runtime>> {
     cx.try_global::<TokioRuntimeGlobal>()
         .map(|g| g.0.runtime.clone())
 }
 
-/// Borrow the shared tokio runtime handle **and** HTTP client together, if a
-/// [`TokioRuntimeGlobal`] has been installed. Returns `None` when the runtime
-/// is absent (callers should degrade gracefully — e.g. log + return an early
-/// result).
+/// Borrow the runtime handle and HTTP client together, or `None` when absent
+/// (callers should degrade gracefully).
 pub fn runtime_and_client(cx: &App) -> Option<(Arc<tokio::runtime::Runtime>, reqwest::Client)> {
     cx.try_global::<TokioRuntimeGlobal>()
         .map(|g| (g.0.runtime.clone(), g.0.http_client.clone()))

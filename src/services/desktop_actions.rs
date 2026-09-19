@@ -309,12 +309,6 @@ pub fn watch_config_dir(cx: &mut App) -> Result<u64, DesktopActionError> {
     watch_path(path, cx)
 }
 
-/// Watch the config directory for changes and coalesce bursts into a single
-/// config-refresh. Activates the previously inert `notify` scaffolding:
-/// instead of merely logging events, the watcher callback pushes into a flume
-/// channel; a gpui task `recv`s the first event, sleeps 500ms to let an
-/// editor's write burst settle, drains any remaining events, then triggers a
-/// window refresh so the UI picks up the new config.
 fn unwatch_path(id: u64, cx: &mut App) -> bool {
     let Some(state) = cx.try_global::<DesktopActionsState>() else {
         return false;

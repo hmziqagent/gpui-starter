@@ -104,12 +104,8 @@ pub fn refresh_permission_state(cx: &mut App) {
     .detach();
 }
 
-/// Probe the FreeDesktop notification daemon once at startup so Settings can
-/// show "no daemon" immediately instead of after the first failed send.
-///
-/// `notify_rust::get_server_information` / `get_capabilities` are synchronous
-/// wrappers over `zbus::block_on` that park the calling thread, so they run on
-/// the tokio blocking pool — never on the GPUI/UI thread.
+/// Probe the FreeDesktop notification daemon at startup so Settings can show
+/// "no daemon" immediately; the notify-rust probes park, so run off-thread.
 pub fn refresh_daemon_state(cx: &mut App) {
     // Linux-only: macOS uses UNUserNotificationCenter and has no D-Bus daemon.
     #[cfg(target_os = "linux")]
@@ -233,10 +229,8 @@ pub fn send_from_window(request: NotificationRequest, window: &mut Window, cx: &
             error_summary = ?result.error_summary,
             "notification send completed"
         );
-        // A successful native send is NOT proof a banner was shown — DND /
-        // per-app mute / busy / fullscreen all suppress while the daemon still
-        // returns Ok — so explicit test affordances force in-app feedback
-        // regardless of `delivered_natively`.
+        // A native Ok is not proof a banner was shown (DND/mute/busy/fullscreen
+        // suppress silently), so test affordances force in-app feedback.
         let should_show_in_app = force_in_app_feedback
             || (!result.delivered_natively
                 && result.importance == NotificationImportance::ForegroundOnly);
@@ -256,9 +250,8 @@ pub fn send_from_window(request: NotificationRequest, window: &mut Window, cx: &
             );
             if should_show_in_app {
                 let feedback: SharedString = if force_in_app_feedback && result.delivered_natively {
-                    // The daemon accepted the call but display is not
-                    // guaranteed — point the user at the two common
-                    // silent-suppression causes instead of feigning success.
+                    // The daemon accepted the call but display is not guaranteed —
+                    // name the common silent-suppression causes, don't feign success.
                     format!(
                         "Sent to the {} notification daemon. If no banner appeared, \
                          check Do Not Disturb and the per-app setting for \"{}\".",
@@ -267,9 +260,8 @@ pub fn send_from_window(request: NotificationRequest, window: &mut Window, cx: &
                     )
                     .into()
                 } else {
-                    // Native delivery failed for a known reason (e.g. "no
-                    // daemon owns org.freedesktop.Notifications") — surface
-                    // that instead of silently re-showing the body.
+                    // Native delivery failed for a known reason — surface that
+                    // instead of silently re-showing the body.
                     result
                         .error_summary
                         .as_ref()
@@ -301,10 +293,8 @@ pub fn open_system_settings(cx: &mut App) {
 
     #[cfg(target_os = "linux")]
     {
-        // GNOME/Ubuntu: gnome-control-center is standard. Fall back to xdg-open
-        // on the settings URI for other desktops. Best-effort — a missing
-        // binary just logs a warning (the test-feedback message already gives
-        // the user the manual path).
+        // gnome-control-center on GNOME/Ubuntu, else xdg-open on the settings
+        // URI. Best-effort: a missing binary just logs.
         tracing::info!(target: LOG, "opening Linux notification settings");
         if std::process::Command::new("gnome-control-center")
             .arg("notifications")

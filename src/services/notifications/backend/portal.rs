@@ -1,10 +1,5 @@
-//! XDG Desktop Portal notification backend (Flatpak / Snap / sandboxed runs),
-//! enabled with the `notifications-portal` feature and selected automatically
-//! when [`crate::platform::environment::is_sandboxed`] is true.
-//!
-//! ashpd is built on zbus/async-io (NOT tokio — zbus forbids both). zbus
-//! drives its own background thread, so these futures are safe to await
-//! directly in the async trait, exactly like notify-rust's `show_async`.
+//! XDG Desktop Portal notification backend (Flatpak/Snap, `notifications-portal`
+//! feature), selected when sandboxed. ashpd/zbus drive their own executor thread.
 
 #![cfg(feature = "notifications-portal")]
 
