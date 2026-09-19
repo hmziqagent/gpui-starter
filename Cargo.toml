@@ -121,9 +121,6 @@ websocket = ["dep:tokio-tungstenite", "dep:tokio-stream"]
 # (services/streaming.rs needs it regardless), so this is an empty gate
 # that only controls the ai_chat feature-page module.
 ai-chat = []
-# Wayland clipboard change monitor (default OFF, Linux-only). Activates the
-# optional wayland deps + the monitor.rs module.
-clipboard-history = ["dep:wayland-client", "dep:wayland-protocols-wlr"]
 # XDG Desktop Portal notification backend for Flatpak/Snap/sandboxed runs
 # (default OFF). When ON and running sandboxed, notifications route through
 # org.freedesktop.portal.Notification via ashpd (reuses the transitive 0.13.x
@@ -207,8 +204,6 @@ sys-locale = "0.3"
 flume = "0.11"
 fuzzy-matcher = "0.3"
 rust-embed = "8"
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols-wlr = { version = "0.3", optional = true, features = ["client"] }
 
 [dev-dependencies]
 insta.workspace = true
@@ -247,7 +242,7 @@ libc = "0.2"
 # these are cfg-fenced separately behind target_family = "wasm" stubs.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 single-instance = "0.3.3"
-interprocess = { version = "2.4.2", features = ["tokio"] }
+interprocess = "2.4.2"
 network-interface = "2.0.3"
 keyring = { version = "3.6.3", features = ["apple-native"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }

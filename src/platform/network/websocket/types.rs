@@ -1,11 +1,4 @@
-//! Core types for the WebSocket client scaffold.
-//!
-//! These types are always available regardless of whether the `websocket`
-//! feature is enabled.
-
-// ---------------------------------------------------------------------------
-// Types that are always available (no dependency required).
-// ---------------------------------------------------------------------------
+//! Types for the WebSocket client scaffold, always compiled.
 
 /// Connection state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,16 +11,10 @@ pub enum ConnectionState {
 }
 
 /// Callback signature for incoming WebSocket messages.
-///
-/// Use this to wire message handling into GPUI context:
-/// ```ignore
-/// let handler: MessageHandler = Box::new(|text: &str| {
-///     // Parse and dispatch into app state
-/// });
-/// ```
 pub type MessageHandler = Box<dyn Fn(&str) + Send + Sync>;
 
-/// Configuration for reconnection behaviour.
+/// Reconnection behaviour: `base_delay_ms * 2^attempt`, capped at
+/// `max_delay_ms` when set.
 #[derive(Clone, Debug)]
 pub struct ReconnectPolicy {
     /// Maximum number of reconnection attempts before giving up.
@@ -49,9 +36,7 @@ impl Default for ReconnectPolicy {
 }
 
 impl ReconnectPolicy {
-    /// Returns the delay for a given attempt number (0-indexed).
-    ///
-    /// Formula: `base_delay_ms * 2^attempt`, capped at `max_delay_ms`.
+    /// Delay for a given 0-indexed attempt number.
     pub fn delay_for_attempt(&self, attempt: u8) -> std::time::Duration {
         let exp = 1u64.checked_shl(attempt as u32).unwrap_or(u64::MAX);
         let raw = self.base_delay_ms.saturating_mul(exp);
@@ -65,6 +50,8 @@ impl ReconnectPolicy {
 pub enum WebSocketError {
     #[error("connection failed: {0}")]
     Connection(String),
+    #[error("not a ws/wss URL: {0}")]
+    InvalidUrl(String),
     #[cfg(feature = "websocket")]
     #[error("send failed: {0}")]
     Send(#[source] tokio_tungstenite::tungstenite::Error),

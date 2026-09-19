@@ -1,9 +1,5 @@
-//! Liquid Glass utilities for macOS 26+.
-//!
-//! This module provides full lifecycle management for `NSGlassEffectView`:
-//! - **Create**: inserts a new glass view into a GPUI window (no GPUI patches needed)
-//! - **Find**: discovers an existing glass view in the native view hierarchy
-//! - **Configure**: adjusts corner radius, style, and tint after creation
+//! macOS 26+ Liquid Glass utilities: create, find, and configure an
+//! `NSGlassEffectView` inside a GPUI window's native view hierarchy.
 
 use gpui::Window;
 use objc2::rc::Retained;
@@ -137,16 +133,8 @@ fn make_nscolor(tint: LiquidGlassTint) -> *mut objc2::runtime::AnyObject {
 pub struct LiquidGlass;
 
 impl LiquidGlass {
-    /// Create a new `NSGlassEffectView` in the window and apply configuration.
-    ///
-    /// This is the primary entry point. It:
-    /// 1. Extracts the native NSView from the GPUI window
-    /// 2. Walks up to the NSWindow
-    /// 3. Creates an `NSGlassEffectView` with a layer-backed content view
-    /// 4. Inserts it below all other subviews
-    /// 5. Optionally disables the window shadow
-    ///
-    /// Returns `None` if `NSGlassEffectView` is not available (macOS < 26).
+    /// Create, configure, and insert an `NSGlassEffectView` below all other
+    /// subviews; `None` when unavailable (macOS < 26).
     pub fn install(window: &Window, config: &LiquidGlassConfig) -> Option<LiquidGlassView> {
         let glass_cls = AnyClass::get(c"NSGlassEffectView")?;
 
@@ -228,9 +216,7 @@ impl LiquidGlass {
         }
     }
 
-    /// Find an existing `NSGlassEffectView` in the window's native view hierarchy.
-    ///
-    /// Returns `None` if not found or not available on this macOS version.
+    /// Find an existing `NSGlassEffectView`; `None` when absent or on macOS < 26.
     pub fn find(window: &Window) -> Option<LiquidGlassView> {
         let glass_cls = AnyClass::get(c"NSGlassEffectView")?;
         let ns_view = Self::get_ns_view(window)?;

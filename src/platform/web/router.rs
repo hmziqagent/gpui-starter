@@ -1,23 +1,5 @@
-//! Hash deep links: `location.hash` ↔ [`AppRoute`], with History API sync.
-//!
-//! The route registry itself lives in [`crate::shell::route`]; this module is
-//! the wasm-only browser wiring around it:
-//!
-//! - **Boot**: an explicit `#/…` hash is parsed and emitted as a
-//!   [`AppEventKind::Navigate`] event (the same queue the native deep-link
-//!   path uses, drained by `AppRoot`), and the boot URL is canonicalized with
-//!   `replaceState` so it is bookmarkable without spawning a history entry.
-//!   An *empty* hash is not a deep link — the persisted startup route wins.
-//! - **Back/forward**: `hashchange` + `popstate` listeners translate external
-//!   URL movement into Navigate events.
-//! - **In-app navigation**: [`push_route_hash`] (called from
-//!   `AppRoot::set_route`'s wasm arm) pushes a history entry so the URL bar
-//!   tracks in-app navigation and Back steps through it. It no-ops when the
-//!   hash already matches — that is the external-navigation case, where the
-//!   browser already moved history and re-pushing would double every entry.
-//!
-//! Listener closures are leaked for the page lifetime (house pattern, same as
-//! the `ApplicationHandle` leak in `src/web.rs`).
+//! Hash deep links: `location.hash` ↔ [`AppRoute`] with History API sync;
+//! every movement funnels into Navigate events or history entries.
 
 use wasm_bindgen::{JsCast as _, JsValue, prelude::Closure};
 
@@ -25,11 +7,11 @@ use crate::{events::AppEventKind, routes::AppRoute};
 
 const LOG: &str = "gpui_starter::web::router";
 
-/// Install hash routing at app init (see module docs for the flow).
+/// Install hash routing at app init; an empty hash means no deep link and the
+/// configured startup route wins.
 pub fn install() {
     let hash = current_hash();
     if hash.is_empty() || hash == "#" {
-        // No deep link at boot: keep the persisted/configured startup route.
         tracing::debug!(
             target: LOG,
             "no location.hash at boot; keeping configured route"
@@ -44,17 +26,8 @@ pub fn install() {
                     route = ?route,
                     "booting from hash deep link"
                 );
-                // Apply through the dispatch queue, NOT inline: install runs
-                // during app::init, possibly before the window/AppRoot (and
-                // its AppEventQueue observer) exist, and observe_global never
-                // replays queued events at registration. The job is correct
-                // under EITHER timing:
-                //   - window not yet created: the config write below is what
-                //     AppRoot::new reads for its initial active_route;
-                //   - window already created: the Navigate event is drained
-                //     by AppRoot's observer (default_global always pushes a
-                //     NotifyGlobalObservers effect, so emit reaches it), and
-                //     the latent event becomes a same-route no-op.
+                // Queue, not inline: correct whether or not the window (and
+                // its Navigate observer) exists yet.
                 super::dispatch::dispatch(move |cx| {
                     crate::app_state::update_config(cx, |config| {
                         config.active_route = route.clone();
@@ -75,11 +48,8 @@ pub fn install() {
     install_listeners();
 }
 
-/// Keep `location.hash` in sync after in-app navigation (wasm arm of
-/// `AppRoot::set_route`). Pushes a history entry only when the hash actually
-/// differs — external navigation (`hashchange`/`popstate`) has already moved
-/// history by the time the resulting Navigate event reaches `set_route`, and
-/// re-pushing there would grow the history stack on every Back press.
+/// Wasm arm of `AppRoot::set_route`: push only when the hash differs, since
+/// external navigation has already moved history.
 pub fn push_route_hash(route: &AppRoute) {
     let hash = route.to_hash();
     if hash == current_hash() {

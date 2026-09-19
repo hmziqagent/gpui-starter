@@ -4,9 +4,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 const LOG: &str = "gpui_starter::tray";
 
-// ---------------------------------------------------------------------------
-// Tray icon pixel data — 36×36 RGBA magnifying-glass template image
-// ---------------------------------------------------------------------------
+// 36×36 RGBA magnifying-glass template icon, drawn in code to avoid an asset.
 
 fn build_icon() -> tray_icon::Icon {
     const SIZE: usize = 36;
@@ -69,10 +67,7 @@ fn build_icon() -> tray_icon::Icon {
         .expect("tray icon pixel data is valid: compile-time constant")
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point — call once from main() on macOS
-// ---------------------------------------------------------------------------
-
+/// Tray + global-hotkey entry point; call once from `main()` on macOS.
 pub fn setup(cx: &mut App) {
     tracing::info!(target: LOG, "Setting up tray icon");
 
@@ -90,16 +85,8 @@ pub fn setup(cx: &mut App) {
     Box::leak(Box::new(tray));
     tracing::debug!(target: LOG, "Tray icon created");
 
-    // Tray-icon clicks and the global hotkey arrive on two crossbeam channels
-    // exposed by `tray_icon` / `global_hotkey`. Each `receiver()` supports a
-    // blocking `recv()`, so instead of waking the GPUI executor 20×/s to poll,
-    // a dedicated OS thread parks on each receiver and forwards a unit tick
-    // over a flume channel. A foreground GPUI task drains that channel
-    // reactively (`recv_async`) and opens the launcher on the UI thread.
-    //
-    // `AsyncApp` is `!Send` (it holds an `Rc`-backed app reference), so the
-    // OS threads cannot call `cx.update` directly; the flume channel is what
-    // gets the event back onto the foreground executor.
+    // Tray/hotkey threads park on blocking crossbeam recvs and forward
+    // ticks over flume: `AsyncApp` is `!Send`, so they cannot `cx.update`.
     let (tx, rx) = flume::unbounded::<()>();
     let tx_hotkey = tx.clone();
 

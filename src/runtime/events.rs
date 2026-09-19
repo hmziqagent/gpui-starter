@@ -6,16 +6,12 @@ use crate::{
     time::AppTimestamp,
 };
 
-// Re-export the forwarded-command type so consumers of the event queue can
-// pattern-match on `RemoteCommand(cmd)` without reaching into the ipc module.
-pub use crate::ipc::command::ForwardedCommand as RemoteCommandKind;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AppEventKind {
     Navigate(AppRoute),
     DeepLinkReceived(String),
-    /// A typed command forwarded from a second instance over IPC. The dispatch
-    /// layer translates this into the appropriate app action.
+    /// Typed command forwarded from a second instance over IPC; the dispatch
+    /// layer translates it into app actions.
     RemoteCommand(ForwardedCommand),
     AppError {
         message: String,
@@ -73,10 +69,8 @@ pub fn emit_error(error: AppError, cx: &mut App) {
 }
 
 pub fn drain(cx: &mut App) -> Vec<AppEvent> {
-    // Read-only check first: if the queue is empty, return early without
-    // touching a mutable reference.  Without this guard, default_global()
-    // mutates the global on every call, which re-triggers observe_global
-    // callbacks, which call drain() again → infinite loop / hang.
+    // Read-only early return: default_global() mutates on every call, which
+    // re-fires observe_global callbacks whose drain() would loop forever.
     if cx
         .try_global::<AppEventQueue>()
         .map_or(true, |q| q.0.is_empty())

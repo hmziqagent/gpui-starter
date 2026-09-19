@@ -1,19 +1,9 @@
-pub mod clipboard;
 pub mod clock;
-#[cfg(target_os = "linux")]
-pub mod compositor;
-pub mod credentials;
 pub mod desktop_shell;
-pub mod dialogs;
 pub mod environment;
 pub mod filesystem;
 pub mod input;
 pub mod ipc;
-#[cfg(target_os = "linux")]
-pub mod layer_shell;
-#[cfg(target_os = "macos")]
-pub mod liquid_glass;
-pub mod native_notifications;
 pub mod network;
 pub mod process;
 // Browser API bridges (clipboard, hash deep links, favicon/title,
