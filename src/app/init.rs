@@ -65,7 +65,7 @@ pub fn init(cx: &mut App) {
     // Marker data must be user-owned, never $TMPDIR (symlink planting);
     // install it before the marker write so startup crashes stay detectable.
     crate::lifecycle::set_app_data_dir(crate::app_state::paths(cx).data_dir.clone());
-    crate::lifecycle::write_crash_marker();
+    // Detect the previous run's marker BEFORE writing this launch's own.
     let previous_crash = crate::lifecycle::check_previous_crash();
     if let Some(marker) = &previous_crash {
         tracing::warn!(
@@ -74,6 +74,7 @@ pub fn init(cx: &mut App) {
             "previous crash detected"
         );
     }
+    crate::lifecycle::write_crash_marker();
 
     startup_step!(cx, "logging_init", {
         crate::logging::initialize(cx);
