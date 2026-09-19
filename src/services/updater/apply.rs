@@ -5,10 +5,6 @@ use std::path::PathBuf;
 use super::types::*;
 use gpui::App;
 
-// ---------------------------------------------------------------------------
-// Apply update
-// ---------------------------------------------------------------------------
-
 /// Wasm: updates never reach the Downloaded state (download is stubbed) and
 /// there is no filesystem to write a swap marker to. No-op.
 #[cfg(target_family = "wasm")]
@@ -29,6 +25,25 @@ pub fn apply_update(cx: &mut App) {
         }
     };
 
+    // The marker carries the manifest signature so the swap can re-verify the
+    // file at install time (it lives in a shared temp dir until then). Without
+    // a cached signature there is nothing to re-verify against — refuse.
+    let signature = current
+        .cached_asset
+        .map(|asset| asset.signature)
+        .unwrap_or_default();
+    if signature.is_empty() {
+        tracing::error!(
+            target: "gpui_starter::updater",
+            "no cached signature for downloaded update — refusing to schedule swap"
+        );
+        super::set_status(
+            UpdateStatus::Error("cannot schedule swap: no signature available".to_string()),
+            cx,
+        );
+        return;
+    }
+
     tracing::info!(
         target: "gpui_starter::updater",
         version = %version,
@@ -38,11 +53,11 @@ pub fn apply_update(cx: &mut App) {
 
     super::set_status(UpdateStatus::ReadyToInstall, cx);
 
-    // Write a marker file so the app launcher can perform the swap on next boot.
     let marker_path = pending_swap_path();
     let pending = serde_json::json!({
         "version": version,
         "source_path": path,
+        "signature": signature,
         "scheduled_at": chrono::Utc::now().to_rfc3339(),
     });
     if let Err(err) = std::fs::write(&marker_path, pending.to_string()) {
@@ -58,10 +73,6 @@ pub fn apply_update(cx: &mut App) {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// Check and apply pending swap on startup
-// ---------------------------------------------------------------------------
 
 /// Wasm: no filesystem — a pending-swap marker can never exist. No-op.
 #[cfg(target_family = "wasm")]
@@ -100,7 +111,7 @@ pub fn check_pending_swap(cx: &mut App) {
                 error = %err,
                 "failed to parse pending swap marker"
             );
-            // Remove corrupt marker so we don't retry indefinitely.
+            // Corrupt marker: drop it so we don't retry indefinitely.
             let _ = std::fs::remove_file(&marker_path);
             return;
         }
@@ -123,13 +134,37 @@ pub fn check_pending_swap(cx: &mut App) {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    if !source_path.exists() {
+    // Fail closed: the file is re-verified against the manifest signature at
+    // swap time, so a tampered temp file can never replace the executable.
+    // Markers without a signature (pre-dating this check) are refused.
+    let signature = pending
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if signature.is_empty() {
+        tracing::error!(
+            target: "gpui_starter::updater",
+            "pending swap marker has no signature — refusing unverified swap"
+        );
+        let _ = std::fs::remove_file(&marker_path);
+        super::set_status(
+            UpdateStatus::Error("pending swap refused: no signature in marker".to_string()),
+            cx,
+        );
+        return;
+    }
+    if let Err(err) = super::download::verify_ed25519_signature(&source_path, signature) {
         tracing::error!(
             target: "gpui_starter::updater",
             path = %source_path.display(),
-            "pending swap source path does not exist"
+            error = %err,
+            "pending swap source failed signature re-verification — removing marker"
         );
         let _ = std::fs::remove_file(&marker_path);
+        super::set_status(
+            UpdateStatus::Error(format!("pending swap refused: {err}")),
+            cx,
+        );
         return;
     }
 
@@ -145,23 +180,20 @@ pub fn check_pending_swap(cx: &mut App) {
         }
     };
 
-    // Detect whether we are inside a .app bundle on macOS.
     let swap_result: Result<(), String> = (|| {
         #[cfg(target_os = "macos")]
         {
-            // If the current exe is inside a .app bundle, swap the entire bundle.
+            // Inside a .app bundle: swap the whole bundle when the source is
+            // one, else replace the binary in place.
             if let Some(bundle_path) = current_exe
                 .ancestors()
                 .find(|a| a.extension().is_some_and(|ext| ext == "app"))
             {
-                // The downloaded source might also be a .app bundle or a directory
-                // that should replace the bundle.
                 let source_bundle = if source_path.extension().is_some_and(|ext| ext == "app") {
                     source_path.clone()
                 } else if source_path.is_dir() {
                     source_path.clone()
                 } else {
-                    // Standalone binary inside a bundle — replace the binary directly.
                     let dest_binary = current_exe.clone();
                     std::process::Command::new("mv")
                         .arg("-f")
@@ -178,7 +210,6 @@ pub fn check_pending_swap(cx: &mut App) {
                     dest = %bundle_path.display(),
                     "swapping .app bundle"
                 );
-                // Remove old bundle and move new one into place.
                 if bundle_path.exists() {
                     std::fs::remove_dir_all(bundle_path)
                         .map_err(|e| format!("failed to remove old bundle: {e}"))?;
@@ -192,7 +223,6 @@ pub fn check_pending_swap(cx: &mut App) {
             }
         }
 
-        // Standalone binary fallback: rename the new binary over the current exe.
         let dest = current_exe.clone();
         std::fs::rename(&source_path, &dest)
             .map_err(|e| format!("failed to rename binary: {e}"))?;
@@ -216,7 +246,7 @@ pub fn check_pending_swap(cx: &mut App) {
                 error = %err,
                 "pending swap failed"
             );
-            // Leave the marker so the user/admin can investigate, but set error status.
+            // Marker stays so the user/admin can investigate.
             super::set_status(UpdateStatus::Error(format!("swap failed: {err}")), cx);
         }
     }
