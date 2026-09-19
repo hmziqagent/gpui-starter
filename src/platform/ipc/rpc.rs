@@ -8,7 +8,7 @@ use super::command::ForwardedRequest;
 const LOG: &str = "gpui_starter::ipc::rpc";
 
 /// Encode a `Serialize`-able value as one compact JSON line with trailing
-/// `\n` — the exact shape `IpcEndpoint`-style senders expect.
+/// `\n`, the wire shape the single-instance forwarder expects.
 pub fn encode_line<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error> {
     let mut line = serde_json::to_string(value)?;
     line.push('\n');

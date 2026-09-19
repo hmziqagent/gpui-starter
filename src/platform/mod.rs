@@ -4,6 +4,8 @@ pub mod environment;
 pub mod filesystem;
 pub mod input;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod liquid_glass;
 pub mod network;
 pub mod process;
 // Browser API bridges (clipboard, hash deep links, favicon/title,
