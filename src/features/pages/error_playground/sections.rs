@@ -11,9 +11,7 @@ use super::ErrorPlaygroundPage;
 use super::helpers::{action_row, result_inline, test_card};
 
 /// Parameter bundle for the unified HTTP/timeout error block renderer.
-///
-/// Every field is `Copy`, so a single value can be captured into the click
-/// closure and reused across invocations without cloning.
+/// All fields are `Copy`, so one value can be captured by the click closure.
 #[derive(Clone, Copy)]
 struct ErrorBlockCtx {
     title: &'static str,
@@ -42,7 +40,6 @@ impl ErrorPlaygroundPage {
                     .primary()
                     .label(button_label.to_string())
                     .on_click(move |_, _, cx| {
-                        // Activate the error boundary by dispatching the action.
                         // AppRoot listens for this and swaps in RenderErrorPage.
                         cx.dispatch_action(&TriggerRenderError {
                             message: error_msg.clone(),
@@ -79,7 +76,7 @@ impl ErrorPlaygroundPage {
                                     .0
                                     .runtime
                                     .clone();
-                                let _handle = rt.spawn(async move {
+                                rt.spawn(async move {
                                     panic!("error playground: background panic");
                                 });
                             })),
@@ -166,13 +163,8 @@ impl ErrorPlaygroundPage {
         )
     }
 
-    /// Unified renderer behind `render_http_error` and `render_async_timeout`.
-    ///
-    /// The two cards are structurally identical; they differ only in URL,
-    /// timeout, copy, and which result field receives updates. The `set_result`
-    /// callback isolates that last difference so the shared spawn/match logic
-    /// lives in exactly one place. The `TokioRuntimeGlobal` is read once per
-    /// click and both handles are pulled from that single borrow.
+    /// Unified renderer behind `render_http_error` and `render_async_timeout`;
+    /// the two differ only in URL, timeout, copy, and the result field.
     fn render_error_block(
         ctx: ErrorBlockCtx,
         set_result: impl Fn(&mut Self, Option<String>) + Copy + Send + 'static,
@@ -192,20 +184,17 @@ impl ErrorPlaygroundPage {
                                 set_result(this, Some(ctx.initial_msg.to_string()));
                                 cx.notify();
 
-                                // Single borrow of the tokio runtime global for both handles
-                                // (previously this read the global twice per click).
+                                // One global read covers both the runtime and client handles.
                                 let tokio_rt = cx
                                     .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>();
-                                // The wasm tokio runtime is an undriven shim —
-                                // only the client is needed there.
+                                // The wasm tokio runtime is an undriven shim; only the client is needed there.
                                 #[cfg(not(target_family = "wasm"))]
                                 let rt = tokio_rt.0.runtime.clone();
                                 let client = tokio_rt.0.http_client.clone();
 
                                 cx.spawn(async move |this, cx| {
-                                    // Native: reqwest needs the driven tokio
-                                    // runtime — spawn the request onto it and
-                                    // await the JoinHandle.
+                                    // Native: reqwest needs the driven tokio runtime, so spawn
+                                    // the request onto it and await the JoinHandle.
                                     #[cfg(not(target_family = "wasm"))]
                                     let msg = {
                                         let result = rt
@@ -232,14 +221,8 @@ impl ErrorPlaygroundPage {
                                         }
                                     };
 
-                                    // Wasm: no driven tokio runtime, and the
-                                    // wasm RequestBuilder has no `.timeout()` —
-                                    // send directly from this local executor
-                                    // (reqwest runs on the browser fetch loop
-                                    // under any executor) and approximate the
-                                    // per-request timeout by racing the fetch
-                                    // against a GPUI timer; a timer win
-                                    // surfaces as the inline timeout error.
+                                    // Wasm: no driven tokio runtime and no `.timeout()` — send from
+                                    // this local executor and race the fetch against a GPUI timer.
                                     #[cfg(target_family = "wasm")]
                                     let msg = {
                                         let timeout = ctx.timeout;

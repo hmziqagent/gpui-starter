@@ -1,23 +1,5 @@
-//! Command palette (a.k.a. "launcher") — thin adapter over
-//! [`crate::features::palette`].
-//!
-//! Historically a ~466-line monolith, this file is now a thin re-export /
-//! adapter that preserves the existing public surface (`init`,
-//! [`LauncherOpen`], [`LauncherActionKind`], [`LauncherItem`],
-//! [`LauncherEvent`], [`Launcher`], [`LauncherRoot`], [`open_launcher`]) while
-//! delegating its item model and fuzzy scoring to the reusable
-//! [`crate::features::palette`] module.
-//!
-//! Behaviour is preserved: the `Launcher` view still renders its own search bar
-//! and result rows (so the visual layout is byte-for-byte identical), and
-//! [`LauncherRoot`] still installs `LiquidGlass` on macOS. The only functional
-//! upgrade is that filtering now uses `SkimMatcherV2` fuzzy scoring (a strict
-//! superset of the old `contains` filter) when the `fuzzy-matcher` crate is
-//! available; it gracefully falls back to substring matching otherwise.
-//!
-//! The new generic pieces live in [`crate::features::palette`]:
-//! [`palette::BaseDelegate`], [`palette::PaletteDelegate`],
-//! [`palette::ItemFilter`], [`palette::SectionManager`], [`palette::PaletteEntry`].
+//! Command palette ("launcher"): a floating search window over the command
+//! registry, backed by [`crate::features::palette`].
 
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -28,7 +10,7 @@ use gpui_component::{
 };
 
 use crate::commands::{self, CommandId};
-use crate::features::palette::{BaseDelegate, FuzzyMatchConfig, ItemFilter, KindStr, PaletteEntry};
+use crate::features::palette::{BaseDelegate, FuzzyMatchConfig, ItemFilter, PaletteEntry};
 
 const LOG: &str = "gpui_starter::launcher";
 const CONTEXT: &str = "Launcher";
@@ -47,10 +29,6 @@ pub fn init(cx: &mut App) {
 pub struct LauncherOpen(pub bool);
 impl Global for LauncherOpen {}
 
-// ---------------------------------------------------------------------------
-// Item model  — now an adapter implementing the generic PaletteEntry contract.
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug)]
 pub enum LauncherActionKind {
     Execute(CommandId),
@@ -65,39 +43,15 @@ pub struct LauncherItem {
 }
 
 impl PaletteEntry for LauncherItem {
-    type Kind = KindStr;
-
-    fn kind(&self) -> Self::Kind {
-        // Every launcher command belongs to the same group.
-        KindStr("Commands")
-    }
     fn name(&self) -> &str {
         &self.title
     }
     fn description(&self) -> Option<&str> {
         Some(&self.subtitle)
     }
-    fn icon(&self) -> Option<IconName> {
-        Some(self.icon.clone())
-    }
-    fn action_hint(&self) -> Option<&str> {
-        Some("Enter")
-    }
-    fn debug_id(&self) -> Option<SharedString> {
-        match self.action {
-            LauncherActionKind::Execute(id) => Some(format!("{id:?}").into()),
-        }
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Launcher view  (pure search UI – emits LauncherEvent)
-//
-// Rendering is intentionally unchanged from the original monolith. Selection
-// state is now held by a `BaseDelegate<LauncherItem>`, and filtering uses the
-// generic `ItemFilter` (SkimMatcherV2) — a superset of the old substring match.
-// ---------------------------------------------------------------------------
-
+// Launcher view: pure search UI, emits LauncherEvent.
 pub enum LauncherEvent {
     Act(LauncherActionKind),
     Dismiss,
@@ -106,9 +60,7 @@ pub enum LauncherEvent {
 pub struct Launcher {
     focus_handle: FocusHandle,
     pub input: Entity<InputState>,
-    /// Generic selection / query state helper (from the palette module).
     state: BaseDelegate<LauncherItem>,
-    /// Fuzzy scorer (from the palette module). Built once.
     filter: ItemFilter,
 }
 
@@ -157,8 +109,6 @@ impl Launcher {
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let q = self.input.read(cx).value().to_lowercase();
-        // The generic ItemFilter scores name (preferred) then description
-        // (penalised). This is a strict superset of the old `contains` match.
         let indices = self.filter.filter_indices(self.state.items(), &q);
         self.state.apply_filtered_indices(indices);
         tracing::debug!(
@@ -170,10 +120,6 @@ impl Launcher {
         cx.notify();
     }
 
-    fn filtered_index(&self, display_ix: usize) -> Option<usize> {
-        self.state.filtered_indices().get(display_ix).copied()
-    }
-
     fn selected_display(&self) -> usize {
         self.state.selected_index().unwrap_or(0)
     }
@@ -183,8 +129,7 @@ impl Launcher {
     }
 
     fn item(&self, display_ix: usize) -> Option<&LauncherItem> {
-        self.filtered_index(display_ix)
-            .and_then(|i| self.state.items().get(i))
+        self.state.get_filtered_item(display_ix)
     }
 
     fn act(&mut self, cx: &mut Context<Self>) {
@@ -211,9 +156,7 @@ impl Render for Launcher {
         let filtered_count = self.state.filtered_count();
         let has_results = filtered_count > 0;
 
-        // Snapshot the visible rows up front so the render closure holds only
-        // owned data and can never fail to resolve an item. Degrade gracefully
-        // by skipping any index that (defensively) does not map to an item.
+        // Snapshot the visible rows so the render closure holds only owned data.
         let rows: Vec<(usize, IconName, SharedString, SharedString)> = (0..filtered_count)
             .filter_map(|di| {
                 let item = self.item(di)?;
@@ -246,7 +189,6 @@ impl Render for Launcher {
             .on_action(cx.listener(|_, _: &Dismiss, _, cx| {
                 cx.emit(LauncherEvent::Dismiss);
             }))
-            // ── Search bar ──────────────────────────────────────────────────
             .child(
                 h_flex()
                     .px_4()
@@ -268,7 +210,6 @@ impl Render for Launcher {
                             .flex_1(),
                     ),
             )
-            // ── Results ─────────────────────────────────────────────────────
             .child(
                 v_flex()
                     .flex_1()
@@ -347,7 +288,6 @@ impl Render for Launcher {
                         )
                     }),
             )
-            // ── Footer hint ─────────────────────────────────────────────────
             .child(
                 h_flex()
                     .px_4()
@@ -365,10 +305,7 @@ impl Render for Launcher {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LauncherRoot  (standalone window root – handles events, closes window)
-// ---------------------------------------------------------------------------
-
+// LauncherRoot: standalone window root, handles events and closes the window.
 pub struct LauncherRoot {
     launcher: Entity<Launcher>,
     should_close: bool,
@@ -420,10 +357,8 @@ impl LauncherRoot {
         })
         .detach();
 
-        // Close the launcher when the window loses OS-level activation
-        // (e.g. user clicks outside the popup window).
-        // Call remove_window directly to avoid a 1-frame delay — macOS
-        // changes the blur treatment on deactivation, which would flash.
+        // remove_window directly on blur: macOS changes the blur treatment on
+        // deactivation, and a deferred close would flash.
         cx.observe_window_activation(window, |_, window, cx| {
             if !window.is_window_active() {
                 tracing::debug!(target: LOG, "Launcher window deactivated — closing");
@@ -460,10 +395,7 @@ impl Render for LauncherRoot {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Open the launcher as a floating PopUp window
-// ---------------------------------------------------------------------------
-
+// Open the launcher as a floating PopUp window.
 pub fn open_launcher(cx: &mut App) {
     if cx.try_global::<LauncherOpen>().is_some_and(|g| g.0) {
         tracing::debug!(target: LOG, "Launcher already open — ignoring open request");

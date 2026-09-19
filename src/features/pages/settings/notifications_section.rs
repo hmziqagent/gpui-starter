@@ -36,10 +36,8 @@ pub(super) fn render_notifications_section(
                 | NotificationPermissionState::Unknown
                 | NotificationPermissionState::Unavailable(_)
         );
-    // Linux has no per-app permission model (always "Unsupported"), so the
-    // button is the user's route to GNOME Settings -> Notifications to check
-    // Do-Not-Disturb / per-app banners. On macOS it only makes sense once the
-    // permission is actually denied/unavailable.
+    // Linux has no per-app permission model, so the button routes to the OS
+    // notification settings; on macOS only once permission is denied.
     let can_open_settings = cfg!(target_os = "linux")
         || (cfg!(target_os = "macos")
             && matches!(

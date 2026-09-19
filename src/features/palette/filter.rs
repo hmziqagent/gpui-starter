@@ -1,38 +1,19 @@
-//! Fuzzy scoring and filtering for palette items.
-//!
-//! Wraps [`fuzzy_matcher::skim::SkimMatcherV2`] with a JSON-configurable
-//! [`FuzzyMatchConfig`] that exposes tuning knobs (bonuses for exact / prefix /
-//! word-prefix / boundary-contiguity matches, a description-only penalty, and a
-//! generic kind multiplier) so application configuration can shape ranking
-//! without code changes.
-//!
-//! Ported from the reference launcher's `item_filter.rs` but rebound to gpui-starter's
-//! [`PaletteEntry`] trait (see [`crate::features::palette::items`]) instead of
-//! the reference launcher's `ListItem` enum, and with all configuration expressed as plain
-//! serde-serialisable fields rather than launcher-specific config types.
+//! Fuzzy scoring and filtering for palette items, wrapping `SkimMatcherV2`.
 
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use serde::{Deserialize, Serialize};
 
 use crate::features::palette::items::PaletteEntry;
 
-const LOG: &str = "gpui_starter::palette::filter";
-
 /// A scored filter hit: the index into the original item slice plus its score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FilteredItem {
-    /// Index into the source items vector.
-    pub index: usize,
-    /// Fuzzy match score (higher is better). May be negative.
-    pub score: i64,
+struct FilteredItem {
+    index: usize,
+    score: i64,
 }
 
-/// JSON-configurable tuning for [`ItemFilter`] scoring.
-///
-/// Every field has a sensible default and is `Serialize`+`Deserialize` so the
-/// whole struct can be dropped into a config file (e.g. a `palette.toml`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Tuning knobs for [`ItemFilter`] scoring.
+#[derive(Clone, Debug)]
 pub struct FuzzyMatchConfig {
     /// Bonus added when an item's name equals the query exactly.
     pub exact_match_bonus: i64,
@@ -47,9 +28,6 @@ pub struct FuzzyMatchConfig {
     /// Multiplier applied to a match found only in the description (0.0–1.0
     /// demotes description-only hits below name hits).
     pub description_penalty: f64,
-    /// Generic multiplier applied per item kind (returned by
-    /// [`PaletteEntry::score_multiplier`]); lets noisy kinds be demoted.
-    pub kind_score_multiplier: f64,
 }
 
 impl Default for FuzzyMatchConfig {
@@ -60,9 +38,6 @@ impl Default for FuzzyMatchConfig {
             word_prefix_bonus: 250,
             contiguity_bonus: 100,
             description_penalty: 0.6,
-            // Identity by default: PaletteEntry::score_multiplier carries any
-            // per-kind demotion.
-            kind_score_multiplier: 1.0,
         }
     }
 }
@@ -70,8 +45,7 @@ impl Default for FuzzyMatchConfig {
 /// Fuzzy filter over anything implementing [`PaletteEntry`].
 pub struct ItemFilter {
     matcher: SkimMatcherV2,
-    /// Public so callers (e.g. a settings UI) can read/write the active tuning.
-    pub config: FuzzyMatchConfig,
+    config: FuzzyMatchConfig,
 }
 
 impl Default for ItemFilter {
@@ -90,8 +64,6 @@ impl ItemFilter {
     }
 
     /// Return just the matching indices, sorted by descending score.
-    ///
-    /// Convenience wrapper around [`ItemFilter::filter_with_scores`].
     pub fn filter_indices<E: PaletteEntry>(&self, items: &[E], query: &str) -> Vec<usize> {
         self.filter_with_scores(items, query)
             .into_iter()
@@ -99,25 +71,16 @@ impl ItemFilter {
             .collect()
     }
 
-    /// Score and sort all items against `query`.
-    ///
-    /// - Empty query: every item is returned with score `0`, in original order.
-    /// - Non-empty query: only items that fuzzy-match are returned, sorted by
-    ///   descending score (ties broken by original index for stable ordering).
-    pub fn filter_with_scores<E: PaletteEntry>(
-        &self,
-        items: &[E],
-        query: &str,
-    ) -> Vec<FilteredItem> {
+    /// Score and sort all items against `query`; empty query returns every item
+    /// in original order, otherwise matching items by descending score.
+    fn filter_with_scores<E: PaletteEntry>(&self, items: &[E], query: &str) -> Vec<FilteredItem> {
         if query.is_empty() {
             return (0..items.len())
                 .map(|index| FilteredItem { index, score: 0 })
                 .collect();
         }
 
-        // Lowercase the query once for the whole filter pass. Previously this
-        // ran inside score_text, re-lowercasing the query per item (and per
-        // name+description fallback) on every keystroke.
+        // Lowercase the query once per pass instead of once per item.
         let query_lower = query.to_lowercase();
 
         let mut scored: Vec<FilteredItem> = items
@@ -129,17 +92,12 @@ impl ItemFilter {
             })
             .collect();
 
-        // Higher score first; stable on ties by original index.
         scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.index.cmp(&b.index)));
         scored
     }
 
     /// Score a single entry, preferring name matches and falling back to the
-    /// description with a penalty.
-    ///
-    /// `query_lower` is the once-per-pass lowercased query (see
-    /// [`Self::filter_with_scores`]); name/description are lowercased here once
-    /// per item so [`Self::score_text`] no longer re-lowercases them per call.
+    /// description with a penalty. `query_lower` is pre-lowercased by the caller.
     fn score_entry<E: PaletteEntry>(
         &self,
         item: &E,
@@ -150,27 +108,16 @@ impl ItemFilter {
         let name_lower = name.to_lowercase();
 
         if let Some(score) = self.score_text(name, &name_lower, query, query_lower, false) {
-            return Some(self.apply_kind_multiplier(score, item));
+            return Some(score);
         }
 
-        if let Some(desc) = item.description() {
-            let desc_lower = desc.to_lowercase();
-            if let Some(score) = self.score_text(desc, &desc_lower, query, query_lower, true) {
-                return Some(self.apply_kind_multiplier(score, item));
-            }
-        }
-
-        None
+        let desc = item.description()?;
+        let desc_lower = desc.to_lowercase();
+        self.score_text(desc, &desc_lower, query, query_lower, true)
     }
 
-    /// Core text scoring with query-normalisation, bonus application, and the
-    /// description penalty.
-    ///
-    /// `text_lower` and `query_lower` are pre-lowercased by the caller
-    /// ([`Self::score_entry`] / [`Self::filter_with_scores`]) so this routine
-    /// no longer calls `.to_lowercase()` per item per keystroke.
-    ///
-    /// Returns `None` when the matcher reports no hit for any normalisation.
+    /// Core text scoring. `text_lower`/`query_lower` are pre-lowercased by the
+    /// caller; returns `None` when the matcher reports no hit.
     fn score_text(
         &self,
         text: &str,
@@ -179,9 +126,8 @@ impl ItemFilter {
         query_lower: &str,
         is_description: bool,
     ) -> Option<i64> {
-        // Try the original query first.
         let matched = self.matcher.fuzzy_indices(text, query).or_else(|| {
-            // Normalise whitespace: "foo bar" -> "foobar" and "foo-bar", which
+            // Normalize whitespace: "foo bar" -> "foobar" and "foo-bar", which
             // lets "counter strike" match "Counter-Strike".
             if !query.contains(' ') {
                 return None;
@@ -194,8 +140,7 @@ impl ItemFilter {
             self.matcher.fuzzy_indices(text, &with_hyphens)
         });
 
-        let (base_score, indices) = matched?;
-        let mut score = base_score;
+        let (mut score, indices) = matched?;
 
         // Bonuses apply only to name matches, not description matches.
         if !is_description {
@@ -217,24 +162,6 @@ impl ItemFilter {
         Some(score)
     }
 
-    /// Scale a score by the entry's own kind multiplier and the global one.
-    fn apply_kind_multiplier<E: PaletteEntry>(&self, score: i64, item: &E) -> i64 {
-        let mult = item.score_multiplier() * self.config.kind_score_multiplier;
-        if (mult - 1.0).abs() < f64::EPSILON {
-            return score;
-        }
-        let scaled = (score as f64 * mult) as i64;
-        if scaled == 0 && score != 0 {
-            tracing::trace!(
-                target: LOG,
-                score,
-                multiplier = mult,
-                "kind multiplier reduced score to zero"
-            );
-        }
-        scaled
-    }
-
     /// Linearly scale the contiguity bonus by how many matched-character pairs
     /// are adjacent. Single-character matches get the full bonus.
     fn contiguity_bonus(&self, indices: &[usize]) -> i64 {
@@ -247,8 +174,7 @@ impl ItemFilter {
     }
 
     /// True when `query_lower` prefixes any whitespace-delimited word in
-    /// `text_lower`. Both arguments must already be lowercased by the caller
-    /// so this routine avoids a per-word `.to_lowercase()` allocation.
+    /// `text_lower`; both arguments must already be lowercased.
     fn matches_word_start(text_lower: &str, query_lower: &str) -> bool {
         text_lower
             .split_whitespace()
@@ -259,26 +185,18 @@ impl ItemFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::palette::items::{KindStr, PaletteEntry};
+    use crate::features::palette::items::PaletteEntry;
 
-    // Minimal test entry: name + optional description + neutral multiplier.
     struct Entry {
         name: &'static str,
         desc: Option<&'static str>,
     }
     impl PaletteEntry for Entry {
-        type Kind = KindStr;
-        fn kind(&self) -> Self::Kind {
-            KindStr("Test")
-        }
         fn name(&self) -> &str {
             self.name
         }
         fn description(&self) -> Option<&str> {
             self.desc
-        }
-        fn score_multiplier(&self) -> f64 {
-            1.0
         }
     }
 
@@ -341,11 +259,11 @@ mod tests {
             Entry {
                 name: "Firefox",
                 desc: None,
-            }, // prefix
+            },
             Entry {
                 name: "Waterfox",
                 desc: None,
-            }, // infix
+            },
         ];
         let r = f.filter_indices(&items, "fire");
         assert_eq!(r[0], 0);

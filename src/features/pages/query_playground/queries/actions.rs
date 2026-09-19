@@ -10,14 +10,9 @@ use super::super::{
     HttpFetchKind, HttpFetchResult, PlaygroundPage, PlaygroundUser, QueryPlaygroundPage,
 };
 
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
 impl QueryPlaygroundPage {
     pub(in super::super) fn fetch_simple(&mut self, cx: &mut Context<Self>) {
         self.ensure_simple_query(cx);
-        // Finding 5: Use defensive `if let Some` instead of `unwrap()`.
         let Some((entity, _)) = self.simple_query.as_ref() else {
             return;
         };
@@ -49,8 +44,7 @@ impl QueryPlaygroundPage {
                 }
             });
             self.log("Simple: signal cancelled");
-            // Finding 7: Removed redundant cx.notify() — the QueryObserver
-            // already triggers re-render on status change.
+            // No cx.notify() needed: the QueryObserver re-renders on status change.
         }
     }
 
@@ -136,7 +130,6 @@ impl QueryPlaygroundPage {
 
     pub(in super::super) fn spam_latest_wins(&mut self, cx: &mut Context<Self>) {
         self.ensure_latest_wins_query(cx);
-        // Finding 5: Defensive `if let Some` instead of `unwrap()`.
         let Some((entity, _)) = self.latest_wins_query.as_ref() else {
             return;
         };
@@ -164,7 +157,6 @@ impl QueryPlaygroundPage {
 
     pub(in super::super) fn spam_ignore(&mut self, cx: &mut Context<Self>) {
         self.ensure_ignore_query(cx);
-        // Finding 5: Defensive `if let Some` instead of `unwrap()`.
         let Some((entity, _)) = self.ignore_query.as_ref() else {
             return;
         };
@@ -198,10 +190,8 @@ impl QueryPlaygroundPage {
         let entity = entity.clone();
         let exec = cx.background_executor().clone();
         self.log("Retry: triggered failing fetch (3 retries, 400ms backoff)");
-        // NOTE: use `fetch_query` (retry-aware, Fn fetcher), NOT
-        // `fetch_query_with_signal` — the latter is FnOnce/single-shot and the
-        // crate explicitly skips retries for it, so the RetryPolicy would never
-        // fire and the count would be stuck at 1.
+        // `fetch_query` (retry-aware, Fn fetcher), not `fetch_query_with_signal`,
+        // which is FnOnce/single-shot and skips retries — the count would stick.
         fetch_query(
             &entity,
             move || {
@@ -221,7 +211,6 @@ impl QueryPlaygroundPage {
             return;
         };
         let entity = entity.clone();
-        // Finding 1/8: Read mutation input from the editable InputState.
         let vars = self.mutation_input_value(cx);
         let vars = if vars.is_empty() {
             "default-vars".to_string()
@@ -250,7 +239,6 @@ impl QueryPlaygroundPage {
             return;
         };
         let entity = entity.clone();
-        // Finding 1/8: Read mutation input from the editable InputState.
         let vars = self.mutation_input_value(cx);
         let vars = if vars.is_empty() {
             "callback-vars".to_string()
@@ -259,8 +247,6 @@ impl QueryPlaygroundPage {
         };
         self.log(format!("Mutation: mutate_with_callbacks('{}')", vars));
 
-        // Finding 2: Use the struct's own `_callback_log` Arc so callbacks
-        // write to a log that survives past this method's return.
         let exec = cx.background_executor().clone();
         let log_for_success = self._callback_log.clone();
         let log_for_error = self._callback_log.clone();
@@ -309,18 +295,16 @@ impl QueryPlaygroundPage {
             return;
         };
         let entity = entity.clone();
-        // Finding 4: Derive page count from entity state instead of tracking
-        // a separate `next_page` counter that goes out of sync after resets.
+        // Derive the page count from entity state; a separate counter would go
+        // stale across resets.
         let current_pages = entity.read_with(cx, |r, _| r.page_count());
         let exec = cx.background_executor().clone();
         self.log(format!(
             "Infinite: load next page (current pages: {})",
             current_pages
         ));
-        // The crate's `has_next_page` is only a fetch gate and goes stale (it's
-        // only updated by forward fetches); force it true so `begin_fetch_next`
-        // proceeds. The UI derives the real "can next" state from the loaded
-        // page range in `render_infinite_query`.
+        // `has_next_page` is only a fetch gate and goes stale; force it true so
+        // `begin_fetch_next` proceeds (the UI derives the real range bounds).
         entity.update(cx, |r, _| r.set_has_next_page(true));
         fetch_next_page_infinite(
             &entity,
@@ -383,7 +367,6 @@ impl QueryPlaygroundPage {
     pub(in super::super) fn reset_infinite(&mut self, cx: &mut Context<Self>) {
         if let Some((entity, _)) = &self.infinite_entity {
             entity.update(cx, |r, _| r.reset());
-            // Finding 4: No separate `next_page` counter to reset.
             self.log("Infinite: reset");
             cx.notify();
         }
@@ -438,9 +421,8 @@ impl QueryPlaygroundPage {
             move |signal| {
                 let exec = exec.clone();
                 async move {
-                    // Cooperative cancellation: poll the signal between short
-                    // timer slices (40 × 50ms = 2s total) so a mid-flight cancel
-                    // is observed within ~50ms instead of running the full 2s.
+                    // Cooperative cancellation: poll the signal between 50ms slices
+                    // so a mid-flight cancel lands within ~50ms of the full 2s.
                     for _ in 0..40 {
                         if signal.is_cancelled() {
                             return Err(QueryError::cancelled("cancelled mid-flight"));
@@ -456,12 +438,8 @@ impl QueryPlaygroundPage {
 
     pub(in super::super) fn cancel_imperative(&mut self, cx: &mut Context<Self>) {
         if let Some((entity, _)) = &self.imperative_query {
-            // Mark the active request as cancelled: this clears
-            // `active_request_id` (so the in-flight result is discarded by
-            // `accept_current_request`), transitions status to `Cancelled`,
-            // and cancels the cooperative signal. Merely flipping the signal
-            // flag — as this previously did — left the request active, so the
-            // late result still landed as Success and nothing re-rendered.
+            // `cancel` (not just the signal flag): discards the in-flight result
+            // and marks the query Cancelled.
             entity.update(cx, |r, _| {
                 r.cancel(QueryError::cancelled("cancelled mid-flight"));
             });
@@ -478,10 +456,7 @@ impl QueryPlaygroundPage {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // HTTP Fetching — real network requests via reqwest over the tokio runtime.
-    // -----------------------------------------------------------------------
-
+    // HTTP Fetching: real requests via reqwest over the tokio runtime.
     pub(in super::super) fn fetch_http(&mut self, kind: HttpFetchKind, cx: &mut Context<Self>) {
         self.ensure_http_query(cx);
         let Some((entity, _)) = self.http_query.as_ref() else {
@@ -526,10 +501,8 @@ impl QueryPlaygroundPage {
             cx,
         );
 
-        // Wasm: reqwest's futures are `!Send` (JS `Rc`/closure internals) but
-        // the query hooks demand `Send` futures. GPUI's executor is
-        // single-threaded (`boxed_local`), so the fetch is pre-spawned there
-        // and the query future only awaits the `Send` task handle.
+        // Wasm: reqwest futures are `!Send` but the hooks demand `Send`, so
+        // pre-spawn on the `Send`-safe local executor and await the handle.
         #[cfg(target_family = "wasm")]
         {
             let http_task = spawn_http_local(cx, &client, &runtime, kind);
@@ -555,27 +528,11 @@ impl QueryPlaygroundPage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared HTTP executor (free functions)
-//
-// Native: reqwest cannot run on gpui's (non-tokio) executor, so each request
-// is `runtime.spawn`-ed onto the tokio runtime and the JoinHandle is awaited
-// from the fetch closure. Shared by the lazy initial fetch (GET JSON, in
-// `init`) and `fetch_http`.
-//
-// Wasm: there is no driven tokio runtime (see
-// `crate::services::tokio_runtime`), and none is needed — reqwest's wasm
-// backend runs on the browser fetch event loop under any executor. Its
-// futures are `!Send`, though, so callers bridge through
-// [`spawn_http_local`] to satisfy the query hooks' `Send` bounds.
-// ---------------------------------------------------------------------------
+// Native: reqwest needs the driven tokio runtime, so requests are spawned onto
+// it and the JoinHandle awaited; wasm bridges through [`spawn_http_local`].
 
-/// Perform the raw HTTP exchange: send the request and buffer the response
-/// body, returning `(status, content_type, raw_body)`.
-///
-/// On wasm this future is `!Send` (reqwest's wasm `Response` holds JS
-/// closures), so it must only be awaited from GPUI's local executor — never
-/// handed to an API with a `Send` bound.
+/// Perform the raw HTTP exchange: send the request and buffer the body. On
+/// wasm the future is `!Send` — await it only from GPUI's local executor.
 async fn exchange(
     client: reqwest::Client,
     kind: HttpFetchKind,
@@ -608,8 +565,7 @@ pub(super) async fn run_http(
     let started = crate::platform::clock::Instant::now();
     let url = kind.url().to_string();
 
-    // Native: spawn the exchange onto the driven tokio runtime and await the
-    // JoinHandle from this (GPUI-executor-driven) future.
+    // Native: spawn onto the driven tokio runtime, await the JoinHandle.
     #[cfg(not(target_family = "wasm"))]
     let (status, content_type, raw) = {
         let join = runtime.spawn(exchange(client.clone(), kind, url.clone()));
@@ -619,15 +575,14 @@ pub(super) async fn run_http(
         joined?
     };
 
-    // Wasm: await the exchange directly — the browser fetch event loop drives
-    // it. (The undriven wasm tokio shim is deliberately unused.)
+    // Wasm: await directly; the browser fetch loop drives it.
     #[cfg(target_family = "wasm")]
     let (status, content_type, raw) = {
         let _ = runtime;
         exchange(client.clone(), kind, url.clone()).await?
     };
 
-    // Pretty-print JSON bodies for readability; truncate long bodies for display.
+    // Pretty-print JSON bodies; truncate long bodies for display.
     let is_json = matches!(kind, HttpFetchKind::GetJson | HttpFetchKind::PostJson);
     let body = if is_json {
         serde_json::from_str::<serde_json::Value>(&raw)
@@ -654,13 +609,8 @@ pub(super) async fn run_http(
     })
 }
 
-/// Wasm-only bridge: pre-spawn `run_http` on GPUI's single-threaded executor.
-///
-/// The query hooks (`use_query`, `fetch_query_with_signal`) require `Send`
-/// futures, but reqwest's wasm futures are `!Send`. GPUI's foreground
-/// executor polls local futures (`boxed_local`), and its [`Task`] handle is
-/// `Send` whenever the output is — so callers hand the hook a future that
-/// just awaits the handle.
+/// Wasm-only bridge: pre-spawn `run_http` on GPUI's local executor. The query
+/// hooks demand `Send` futures; the local-executor task handle is `Send`.
 #[cfg(target_family = "wasm")]
 pub(super) fn spawn_http_local(
     cx: &mut Context<QueryPlaygroundPage>,
