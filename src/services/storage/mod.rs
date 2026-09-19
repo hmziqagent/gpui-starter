@@ -16,6 +16,10 @@
 //! await points — so SQLite I/O still completes without ever yielding.
 #[cfg(not(target_family = "wasm"))]
 mod backend;
+// Target-neutral by design (the protocol tests run natively), but only the
+// wasm web backend consumes it — the test escape hatch keeps clippy's
+// dead_code from killing the native build under -D warnings.
+#[cfg(any(target_family = "wasm", test))]
 pub(crate) mod protocol;
 mod runtime;
 #[cfg(target_family = "wasm")]

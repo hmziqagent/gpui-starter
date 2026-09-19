@@ -171,6 +171,10 @@ mod live {
         /// `self.inner` so that [`send`](Self::send) can route messages
         /// through it. Any messages buffered during a previous disconnection
         /// are flushed before the read loop begins.
+        // The error enum carries one variant per failure mode across the
+        // whole client; boxing it through the internal state machine would
+        // trade ergonomics for a size heuristic.
+        #[allow(clippy::result_large_err)]
         pub async fn connect_loop(&mut self) -> Result<(), WebSocketError> {
             let mut attempt: u8 = 0;
 
@@ -219,6 +223,7 @@ mod live {
         /// distinction to decide whether to reset the reconnect backoff
         /// counter. Extracting the per-session body also makes a single
         /// session unit-testable in isolation.
+        #[allow(clippy::result_large_err)]
         async fn run_session(&mut self, attempt: u8) -> Result<(), WebSocketError> {
             match connect_async(&self.url).await {
                 Ok((ws_stream, _response)) => {
@@ -317,6 +322,7 @@ mod live {
         ///
         /// Returns [`WebSocketError::NotConnected`] only when the buffer is
         /// full and the message would be dropped.
+        #[allow(clippy::result_large_err)]
         pub async fn send(&self, message: &str) -> Result<(), WebSocketError> {
             let mut guard = self.inner.lock().await;
             match guard.as_mut() {
@@ -348,6 +354,7 @@ mod live {
         /// Takes the write half out of the mutex (setting it to `None`) and
         /// sends a close frame. Also clears the pending buffer since no more
         /// messages will be delivered.
+        #[allow(clippy::result_large_err)]
         pub async fn close(&mut self) -> Result<(), WebSocketError> {
             let sink = {
                 let mut guard = self.inner.lock().await;
