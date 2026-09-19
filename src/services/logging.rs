@@ -14,6 +14,7 @@ pub struct LoggingRuntime {
 
 pub struct LoggingState {
     pub runtime: LoggingRuntime,
+    // Must stay held: dropping the WorkerGuard stops the non-blocking writer.
     #[cfg(not(target_family = "wasm"))]
     #[allow(dead_code)]
     guard: Option<WorkerGuard>,
@@ -44,9 +45,8 @@ pub fn initialize(cx: &mut App) {
     initialize_state(cx, log_dir, file_prefix, init_result, Some(guard));
 }
 
-/// Wasm: stderr-only layer (a no-op sink on wasm32-unknown-unknown — no
-/// filesystem appender exists; browser console logging comes from the web
-/// platform init's panic hook instead).
+/// Wasm: stderr-only layer (no file appender; browser console logging comes
+/// from the web platform init's panic hook instead).
 #[cfg(target_family = "wasm")]
 pub fn initialize(cx: &mut App) {
     let paths = crate::app_state::paths(cx);
@@ -54,10 +54,8 @@ pub fn initialize(cx: &mut App) {
     let file_prefix = "gpui-starter.log".to_string();
 
     let init_result = tracing_subscriber::registry()
-        // without_time: the fmt layer's default timer reads
-        // std::time::SystemTime on EVERY formatted event, which panics at
-        // runtime on wasm32-unknown-unknown. The browser console already
-        // timestamps each line, so the in-band timestamp is redundant here.
+        // without_time: the default timer reads std::time::SystemTime, which
+        // panics on wasm32-unknown-unknown; the console already timestamps.
         .with(tracing_subscriber::fmt::layer().without_time())
         .with(env_filter())
         .try_init();
@@ -65,33 +63,21 @@ pub fn initialize(cx: &mut App) {
     initialize_state(cx, log_dir, file_prefix, init_result, ());
 }
 
+const DEFAULT_DIRECTIVES: [&str; 5] = [
+    "gpui::window=off",
+    "gpui-starter=trace",
+    "gpui_starter=trace",
+    "user_notify=debug",
+    "notify_rust=debug",
+];
+
+/// RUST_LOG wins where set; these directives are the floor.
 fn env_filter() -> tracing_subscriber::EnvFilter {
-    tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive(
-            "gpui::window=off"
-                .parse()
-                .expect("hardcoded directive is valid"),
-        )
-        .add_directive(
-            format!("{}=trace", env!("CARGO_PKG_NAME"))
-                .parse()
-                .expect("hardcoded directive is valid"),
-        )
-        .add_directive(
-            "gpui_starter=trace"
-                .parse()
-                .expect("hardcoded directive is valid"),
-        )
-        .add_directive(
-            "user_notify=debug"
-                .parse()
-                .expect("hardcoded directive is valid"),
-        )
-        .add_directive(
-            "notify_rust=debug"
-                .parse()
-                .expect("hardcoded directive is valid"),
-        )
+    let mut filter = tracing_subscriber::EnvFilter::from_default_env();
+    for directive in DEFAULT_DIRECTIVES {
+        filter = filter.add_directive(directive.parse().expect("hardcoded directive is valid"));
+    }
+    filter
 }
 
 fn initialize_state(
@@ -102,10 +88,6 @@ fn initialize_state(
     #[cfg(not(target_family = "wasm"))] guard: Option<WorkerGuard>,
     #[cfg(target_family = "wasm")] _guard: (),
 ) {
-    // On wasm the guard parameter is a `()` placeholder (no file appender).
-    #[cfg(target_family = "wasm")]
-    let () = _guard;
-
     let runtime = match init_result {
         Ok(()) => {
             tracing::info!(

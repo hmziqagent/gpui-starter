@@ -190,7 +190,6 @@ reqwest = { version = "0.12.24", default-features = false, features = [
     "stream",
 ] }
 opentelemetry = "0.24.0"
-tracing-opentelemetry = "0.25.0"
 # Optional: OTLP HTTP exporter for remote telemetry (enable with --features otlp)
 opentelemetry-otlp = { version = "0.17.0", optional = true, features = [
     "http-proto",

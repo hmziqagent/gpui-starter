@@ -1,12 +1,8 @@
 use gpui::{App, BorrowAppContext as _, Global, SharedString};
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
 // Native: variants carry the underlying `keyring::Error`. Wasm: keyring does
 // not exist, so the same variant names carry the error message string —
 // callers only ever `Display` the error.
-
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
 pub enum SecureStorageError {
@@ -69,10 +65,6 @@ pub enum SecureStorageError {
     },
 }
 
-// ---------------------------------------------------------------------------
-// GPUI global + initialization
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Default)]
 pub struct SecureStorageSnapshot {
     pub available: bool,
@@ -112,12 +104,12 @@ pub fn initialize(cx: &mut App) {
 pub fn initialize(cx: &mut App) {
     let snapshot = SecureStorageSnapshot {
         available: false,
-        last_error: Some("secure storage unavailable on wasm".to_string()),
+        last_error: Some(WASM_UNAVAILABLE.to_string()),
     };
     cx.set_global(snapshot.clone());
     crate::capabilities::set(
         "secure_storage",
-        crate::capabilities::CapabilityStatus::error("secure storage unavailable on wasm"),
+        crate::capabilities::CapabilityStatus::error(WASM_UNAVAILABLE),
         cx,
     );
 }
@@ -128,9 +120,20 @@ pub fn snapshot(cx: &App) -> SecureStorageSnapshot {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// Secret operations (native: keyring; wasm: always unavailable)
-// ---------------------------------------------------------------------------
+#[cfg(target_family = "wasm")]
+const WASM_UNAVAILABLE: &str = "secure storage unavailable on wasm";
+
+#[cfg(not(target_family = "wasm"))]
+fn entry(service: &str, key: &str) -> Result<keyring::Entry, SecureStorageError> {
+    keyring::Entry::new(service, key).map_err(|err| {
+        tracing::error!(target: "gpui_starter::secure_storage", "entry creation failed: {err}");
+        SecureStorageError::EntryCreation {
+            service: service.to_string(),
+            key: key.to_string(),
+            source: err,
+        }
+    })
+}
 
 #[cfg(not(target_family = "wasm"))]
 pub fn set_secret(
@@ -139,14 +142,7 @@ pub fn set_secret(
     value: &str,
     cx: &mut App,
 ) -> Result<(), SecureStorageError> {
-    let entry = keyring::Entry::new(service, key).map_err(|err| {
-        tracing::error!(target: "gpui_starter::secure_storage", "entry creation failed: {err}");
-        SecureStorageError::EntryCreation {
-            service: service.to_string(),
-            key: key.to_string(),
-            source: err,
-        }
-    })?;
+    let entry = entry(service, key)?;
     entry.set_password(value).map_err(|err| {
         tracing::error!(target: "gpui_starter::secure_storage", service, key, "set_password failed: {err}");
         update_last_error(Some(err.to_string()), cx);
@@ -163,14 +159,7 @@ pub fn get_secret(
     key: &str,
     cx: &mut App,
 ) -> Result<Option<SharedString>, SecureStorageError> {
-    let entry = keyring::Entry::new(service, key).map_err(|err| {
-        tracing::error!(target: "gpui_starter::secure_storage", "entry creation failed: {err}");
-        SecureStorageError::EntryCreation {
-            service: service.to_string(),
-            key: key.to_string(),
-            source: err,
-        }
-    })?;
+    let entry = entry(service, key)?;
     match entry.get_password() {
         Ok(value) => {
             tracing::info!(target: "gpui_starter::secure_storage", service, key, "secret read");
@@ -194,14 +183,7 @@ pub fn get_secret(
 
 #[cfg(not(target_family = "wasm"))]
 pub fn delete_secret(service: &str, key: &str, cx: &mut App) -> Result<(), SecureStorageError> {
-    let entry = keyring::Entry::new(service, key).map_err(|err| {
-        tracing::error!(target: "gpui_starter::secure_storage", "entry creation failed: {err}");
-        SecureStorageError::EntryCreation {
-            service: service.to_string(),
-            key: key.to_string(),
-            source: err,
-        }
-    })?;
+    let entry = entry(service, key)?;
     entry.delete_credential().map_err(|err| {
         tracing::error!(target: "gpui_starter::secure_storage", service, key, "delete failed: {err}");
         update_last_error(Some(err.to_string()), cx);
@@ -219,11 +201,11 @@ pub fn set_secret(
     _value: &str,
     cx: &mut App,
 ) -> Result<(), SecureStorageError> {
-    update_last_error(Some("secure storage unavailable on wasm".to_string()), cx);
+    update_last_error(Some(WASM_UNAVAILABLE.to_string()), cx);
     Err(SecureStorageError::SetFailed {
         service: service.to_string(),
         key: key.to_string(),
-        reason: "secure storage unavailable on wasm".to_string(),
+        reason: WASM_UNAVAILABLE.to_string(),
     })
 }
 
@@ -233,21 +215,21 @@ pub fn get_secret(
     key: &str,
     cx: &mut App,
 ) -> Result<Option<SharedString>, SecureStorageError> {
-    update_last_error(Some("secure storage unavailable on wasm".to_string()), cx);
+    update_last_error(Some(WASM_UNAVAILABLE.to_string()), cx);
     Err(SecureStorageError::GetFailed {
         service: service.to_string(),
         key: key.to_string(),
-        reason: "secure storage unavailable on wasm".to_string(),
+        reason: WASM_UNAVAILABLE.to_string(),
     })
 }
 
 #[cfg(target_family = "wasm")]
 pub fn delete_secret(service: &str, key: &str, cx: &mut App) -> Result<(), SecureStorageError> {
-    update_last_error(Some("secure storage unavailable on wasm".to_string()), cx);
+    update_last_error(Some(WASM_UNAVAILABLE.to_string()), cx);
     Err(SecureStorageError::DeleteFailed {
         service: service.to_string(),
         key: key.to_string(),
-        reason: "secure storage unavailable on wasm".to_string(),
+        reason: WASM_UNAVAILABLE.to_string(),
     })
 }
 

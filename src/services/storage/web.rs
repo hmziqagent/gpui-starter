@@ -1,33 +1,17 @@
-//! Wasm storage backend: SQLite on OPFS, hosted in a dedicated classic
-//! worker (`wasm/sqlite/worker.js`) built on the vendored
-//! `@sqlite.org/sqlite-wasm` engine, speaking the JSON protocol from
-//! [`super::protocol`].
+//! Wasm storage backend: SQLite on OPFS, hosted in a dedicated classic worker
+//! (`wasm/sqlite/worker.js`, vendored `@sqlite.org/sqlite-wasm` engine),
+//! speaking the JSON protocol from [`super::protocol`].
 //!
-//! Why a worker: OPFS sync access handles are only available inside
-//! workers, and the harness serves `Cross-Origin-Opener-Policy:
-//! same-origin` + `Cross-Origin-Embedder-Policy: require-corp` on every
-//! response (cross-origin isolated), which the OPFS VFS requires. The
-//! worker script is a classic script (no import maps) served from the
-//! harness statics root, so no `index.html`/`build.sh` wiring is needed.
+//! OPFS sync access handles exist only inside workers, and the harness serves
+//! the COOP/COEP headers the OPFS VFS requires. The trait's `#[async_trait]`
+//! futures must be `Send`, but `Worker`/`Closure`/`JsValue` are not: all JS
+//! state lives in a thread-local (wasm is single-threaded) and only the
+//! `Send` `flume::Receiver` is held across an await.
 //!
-//! Send-future note (same constraint as the web notification backend): the
-//! trait's `#[async_trait]` futures must be `Send`, but `Worker`,
-//! `Closure`, and `JsValue` are not. All JS state therefore lives in a
-//! thread-local (wasm is single-threaded and every access happens on the
-//! main JS thread), and the async methods only ever hold the `Send`
-//! `flume::Receiver` across an await. No thread-local borrow is held
-//! across an await point.
-//!
-//! Degrade paths, all explicit:
-//! - No Worker API / script URL rejected: [`boot_storage_worker`] returns
-//!   `Err(reason)` and the runtime keeps the unavailable-snapshot behavior
-//!   (the app boots and works; the diagnostics storage panel reports the
-//!   reason).
-//! - OPFS or engine init failure inside the worker: every request (queued
-//!   or new) answers `{"op":"error"}` with the init failure text.
-//! - Worker crashes mid-session (`error` event): the failure reason is
-//!   recorded, all pending requests fail with it, and later requests fail
-//!   fast instead of hanging.
+//! Degrade paths: missing Worker API/URL rejection → `boot_storage_worker`
+//! returns `Err`; engine/OPFS init failure inside the worker → every request
+//! answers `{"op":"error"}`; worker crash mid-session → pending requests fail
+//! with the reason and later ones fail fast.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

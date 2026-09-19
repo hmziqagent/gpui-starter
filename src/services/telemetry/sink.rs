@@ -2,20 +2,9 @@
 
 use super::TelemetryError;
 
-// ---------------------------------------------------------------------------
-// OTLP exporter (feature-gated)
-// ---------------------------------------------------------------------------
-
-/// Attempt to install an OTLP HTTP tracer provider on the global
-/// OpenTelemetry pipeline.
-///
-/// Returns `Ok(provider)` when the provider was installed successfully or when
-/// the `otlp` feature is not enabled (no-op). Returns a human-readable
-/// error string when the exporter cannot reach the collector.
-///
-/// The returned [`opentelemetry_sdk::trace::TracerProvider`] is kept by the
-/// caller so it can invoke [`force_flush`](opentelemetry_sdk::trace::TracerProvider::force_flush)
-/// without shutting down the global provider.
+/// Install an OTLP HTTP tracer provider on the global pipeline. Returns a
+/// human-readable error when the exporter cannot be built; the returned
+/// provider is kept for `force_flush` without a global shutdown.
 #[cfg(feature = "otlp")]
 pub(super) fn install_otlp_tracer(
     endpoint: &str,
@@ -43,7 +32,7 @@ pub(super) fn install_otlp_tracer(
         .map_err(|e| TelemetryError::Otlp(Box::new(e)))?;
 
     global::set_text_map_propagator(TraceContextPropagator::new());
-    // Pass a clone to the global registry; keep the original for force_flush.
+    // Keep the original for force_flush; the global registry holds a clone.
     global::set_tracer_provider(provider.clone());
 
     tracing::info!(
@@ -54,10 +43,7 @@ pub(super) fn install_otlp_tracer(
     Ok(provider)
 }
 
-/// No-op fallback when the `otlp` feature is disabled.
-///
-/// Logs the endpoint for diagnostics but does not create an exporter.
-/// Returns a unit `()` since there is no provider to track.
+/// No-op fallback when the `otlp` feature is disabled — tracing-only export.
 #[cfg(not(feature = "otlp"))]
 pub(super) fn install_otlp_tracer(endpoint: &str) -> Result<(), TelemetryError> {
     tracing::debug!(
@@ -67,10 +53,6 @@ pub(super) fn install_otlp_tracer(endpoint: &str) -> Result<(), TelemetryError> 
     );
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// DisabledSink
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 pub(super) struct DisabledSink;
@@ -92,10 +74,6 @@ impl super::TelemetrySink for DisabledSink {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// LocalSink
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 pub(super) struct LocalSink;
@@ -121,61 +99,29 @@ impl super::TelemetrySink for LocalSink {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RemoteSink
-// ---------------------------------------------------------------------------
-
-/// Remote telemetry sink that exports spans via the OTLP protocol over HTTP.
-///
-/// # Configuration
-///
-/// The collector endpoint is resolved in this order:
-///
-/// 1. The `endpoint` argument passed to [`set_mode`](super::set_mode).
-/// 2. The `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
-/// 3. The built-in default `http://localhost:4318`.
-///
-/// # Prerequisites
-///
-/// Real export requires the `otlp` Cargo feature. Without it the sink still
-/// records events through the tracing layer (visible via `tracing-subscriber`)
-/// but does not ship them to a collector.
-///
-/// # Error handling
-///
-/// Connection failures during tracer installation are captured and surfaced
-/// through [`TelemetrySnapshot::last_export_error`]. The sink itself never
-/// panics; individual event records are logged at debug/warn level and
-/// propagated to the subscriber regardless of collector reachability.
-///
-/// # Flush vs Shutdown
-///
-/// [`flush`](super::TelemetrySink::flush) pushes pending spans to the collector
-/// **without** disabling the tracer provider. The provider remains active and
-/// continues accepting new spans after a flush.
-///
-/// [`shutdown`](crate::services::telemetry::shutdown) terminates the provider
-/// permanently. No further spans can be exported after shutdown.
+/// Remote sink exporting via OTLP over HTTP. Endpoint precedence matches
+/// [`super::resolve_otlp_endpoint`]; without the `otlp` feature it stays in a
+/// tracing-only mode that reports itself connected.
 #[derive(Clone)]
 pub(super) struct RemoteSink {
     endpoint: String,
     pub(super) connected: bool,
-    /// Handle to the SDK tracer provider, used to call `force_flush()` without
-    /// shutting down the global provider. Only `Some` when the `otlp` feature
-    /// is enabled and the provider was installed successfully.
+    /// Kept so flush can call force_flush without shutting down the global provider.
     #[cfg(feature = "otlp")]
     provider: Option<opentelemetry_sdk::trace::TracerProvider>,
 }
 
 impl RemoteSink {
-    /// Create a new `RemoteSink`, attempting to install the OTLP tracer
-    /// provider in the process.
-    ///
-    /// The `connected` flag is set to `false` when installation fails, which
-    /// allows callers to report the degradation through the capability system.
-    #[allow(unused_variables)]
-    pub(super) fn new(endpoint: &str) -> Self {
-        let (connected, provider) = Self::install(endpoint);
+    /// `runtime` must be the shared tokio runtime handle: the batch exporter
+    /// spawns its batching task on the ambient runtime, and GPUI threads run
+    /// outside any tokio context. Without a handle the sink stays disconnected
+    /// instead of panicking.
+    pub(super) fn new(endpoint: &str, runtime: Option<tokio::runtime::Handle>) -> Self {
+        #[cfg(feature = "otlp")]
+        let (connected, provider) = Self::install(endpoint, runtime);
+        // The () install payload only exists without the `otlp` feature.
+        #[cfg(not(feature = "otlp"))]
+        let (connected, ()) = Self::install(endpoint, runtime);
         Self {
             endpoint: endpoint.to_owned(),
             connected,
@@ -184,13 +130,19 @@ impl RemoteSink {
         }
     }
 
-    /// Delegate to [`install_otlp_tracer`] and separate success/failure state.
-    ///
-    /// When the `otlp` feature is enabled, returns `(true, Some(provider))` on
-    /// success. When the feature is disabled, returns `(true, None)` (the
-    /// no-op path always succeeds).
     #[cfg(feature = "otlp")]
-    fn install(endpoint: &str) -> (bool, Option<opentelemetry_sdk::trace::TracerProvider>) {
+    fn install(
+        endpoint: &str,
+        runtime: Option<tokio::runtime::Handle>,
+    ) -> (bool, Option<opentelemetry_sdk::trace::TracerProvider>) {
+        let Some(handle) = runtime else {
+            tracing::warn!(
+                target: "gpui_starter::telemetry",
+                "no tokio runtime handle available; OTLP exporter not installed"
+            );
+            return (false, None);
+        };
+        let _enter = handle.enter();
         match install_otlp_tracer(endpoint) {
             Ok(provider) => (true, Some(provider)),
             Err(err) => {
@@ -205,9 +157,8 @@ impl RemoteSink {
         }
     }
 
-    /// No-op install path when the `otlp` feature is disabled.
     #[cfg(not(feature = "otlp"))]
-    fn install(endpoint: &str) -> (bool, ()) {
+    fn install(endpoint: &str, _runtime: Option<tokio::runtime::Handle>) -> (bool, ()) {
         let connected = match install_otlp_tracer(endpoint) {
             Ok(()) => true,
             Err(err) => {
@@ -223,11 +174,7 @@ impl RemoteSink {
         (connected, ())
     }
 
-    /// Call `force_flush()` on the stored SDK tracer provider.
-    ///
-    /// This pushes all buffered spans to the collector without disabling the
-    /// provider. Errors from individual span processors are collected and
-    /// returned as a single [`TelemetryError::Otlp`].
+    /// Push buffered spans to the collector without disabling the provider.
     #[cfg(feature = "otlp")]
     fn force_flush_provider(&self) -> Result<(), TelemetryError> {
         let Some(provider) = self.provider.as_ref() else {
@@ -238,8 +185,11 @@ impl RemoteSink {
             return Ok(());
         };
 
-        let results = provider.force_flush();
-        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
+        let errors: Vec<_> = provider
+            .force_flush()
+            .into_iter()
+            .filter_map(|r| r.err())
+            .collect();
 
         if errors.is_empty() {
             Ok(())
@@ -255,26 +205,14 @@ impl RemoteSink {
         }
     }
 
-    /// No-op flush path when the `otlp` feature is disabled.
     #[cfg(not(feature = "otlp"))]
     fn force_flush_provider(&self) -> Result<(), TelemetryError> {
         Ok(())
     }
 
-    /// Guard for sink methods that require collector connectivity.
-    ///
-    /// When the sink is connected, returns `Ok(())` so the caller proceeds with
-    /// its normal queue/flush path. When it is not connected, invokes the
-    /// supplied `log_dropped` closure (so each caller can emit its own richly
-    /// structured "dropped"/"skipped" line preserving per-call fields such as
-    /// the event name, error text, or user property key/value) and returns
-    /// [`TelemetryError::NotAvailable`].
-    ///
-    /// The structured log emission deliberately lives at each call site rather
-    /// than inside this helper: `tracing` field sets are baked into the macro
-    /// at the call site and cannot be threaded through a single shared
-    /// invocation without dropping the per-call context that is the whole
-    /// point of the log.
+    /// Gate for methods that need collector connectivity; `log_dropped` keeps
+    /// each call site's structured fields (event name, error text, key/value)
+    /// in its own tracing macro.
     fn require_connected(&self, log_dropped: impl FnOnce()) -> Result<(), TelemetryError> {
         if self.connected {
             return Ok(());
@@ -328,12 +266,8 @@ impl super::TelemetrySink for RemoteSink {
         Ok(())
     }
 
-    /// Push pending spans to the collector **without** shutting down the provider.
-    ///
-    /// This is safe to call repeatedly (e.g. from the Settings "Flush
-    /// Telemetry" button). The tracer provider remains fully operational after
-    /// each flush, unlike `shutdown_tracer_provider()` which is a one-way
-    /// destructive operation.
+    /// Flush is repeatable (Settings button) and leaves the provider active,
+    /// unlike the one-way `shutdown_tracer_provider()`.
     fn flush(&self) -> Result<(), TelemetryError> {
         self.require_connected(|| {
             tracing::debug!(
