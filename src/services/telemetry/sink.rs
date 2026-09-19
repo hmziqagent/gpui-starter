@@ -1,6 +1,14 @@
 //! Telemetry sink implementations: disabled, local, and remote (OTLP).
 
+#[cfg(feature = "otlp")]
+use std::sync::OnceLock;
+
 use super::TelemetryError;
+
+// Holds the installed pipeline; rebuilding on every set_mode(Remote) would
+// leak the previous batch exporter (background thread + connections).
+#[cfg(feature = "otlp")]
+static INSTALLED_PIPELINE: OnceLock<opentelemetry_sdk::trace::TracerProvider> = OnceLock::new();
 
 /// Install an OTLP HTTP tracer provider on the global pipeline. Returns a
 /// human-readable error when the exporter cannot be built; the returned
@@ -17,6 +25,15 @@ pub(super) fn install_otlp_tracer(
     use opentelemetry_sdk::runtime::Tokio;
 
     use super::SERVICE_NAME;
+
+    if let Some(existing) = INSTALLED_PIPELINE.get() {
+        tracing::warn!(
+            target: "gpui_starter::telemetry",
+            requested_endpoint = %endpoint,
+            "OTLP pipeline already installed; reusing it (endpoint changes need an app restart)"
+        );
+        return Ok(existing.clone());
+    }
 
     let exporter = opentelemetry_otlp::new_exporter()
         .http()
@@ -40,6 +57,7 @@ pub(super) fn install_otlp_tracer(
         endpoint = %endpoint,
         "OTLP tracer provider installed"
     );
+    let _ = INSTALLED_PIPELINE.set(provider.clone());
     Ok(provider)
 }
 

@@ -10,9 +10,8 @@
 //! answer via worker round-trips; native bodies stay synchronous internally.
 #[cfg(not(target_family = "wasm"))]
 mod backend;
-// Target-neutral by design (the protocol tests run natively), but only the
-// wasm web backend consumes it — the test escape hatch keeps clippy's
-// dead_code from killing the native build under -D warnings.
+// Target-neutral so the protocol tests run natively; the wasm-only web
+// backend consumes it, and the test cfg keeps native builds warning-free.
 #[cfg(any(target_family = "wasm", test))]
 pub(crate) mod protocol;
 mod runtime;

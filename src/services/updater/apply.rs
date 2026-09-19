@@ -53,7 +53,17 @@ pub fn apply_update(cx: &mut App) {
 
     super::set_status(UpdateStatus::ReadyToInstall, cx);
 
-    let marker_path = pending_swap_path();
+    let Some(marker_path) = pending_swap_path() else {
+        tracing::error!(
+            target: "gpui_starter::updater",
+            "no app updates directory; cannot schedule swap"
+        );
+        super::set_status(
+            UpdateStatus::Error("cannot schedule swap: no app data dir".to_string()),
+            cx,
+        );
+        return;
+    };
     let pending = serde_json::json!({
         "version": version,
         "source_path": path,
@@ -80,7 +90,9 @@ pub fn check_pending_swap(_cx: &mut App) {}
 
 #[cfg(not(target_family = "wasm"))]
 pub fn check_pending_swap(cx: &mut App) {
-    let marker_path = pending_swap_path();
+    let Some(marker_path) = pending_swap_path() else {
+        return;
+    };
     if !marker_path.exists() {
         return;
     }

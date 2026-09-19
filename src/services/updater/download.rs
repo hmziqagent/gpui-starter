@@ -24,9 +24,8 @@ pub fn download_update(cx: &mut App) {
         }
     };
 
-    // Wasm: downloads can never be Available (check_for_updates reports
-    // UpToDate on wasm), and there is no binary to swap — degrade to a no-op
-    // rather than touching the (undriven) tokio runtime.
+    // Wasm: updates are desktop-only (binary swap on disk); never be
+    // Available here, and never touch the (undriven) tokio runtime.
     #[cfg(target_family = "wasm")]
     {
         tracing::debug!(
@@ -122,20 +121,22 @@ async fn run_download(
         },
     };
 
-    let tmp_dir = std::env::temp_dir().join("gpui-starter-updates");
-    if let Err(err) = std::fs::create_dir_all(&tmp_dir) {
-        return Err(format!("failed to create temp dir: {err}"));
-    }
+    // Download into the app-owned updates dir; a shared $TMPDIR would let a
+    // pre-created symlink redirect this write of unverified bytes.
+    let Some(dest_dir) = updates_dir() else {
+        return Err("no app updates directory available".to_string());
+    };
 
     // The file name comes from the manifest-controlled URL; pin it to a plain
-    // last segment so it can never point outside the temp dir.
+    // last segment so it can never point outside the updates dir.
     let raw_name = asset.url.rsplit('/').next().unwrap_or("");
-    let file_name = if raw_name.is_empty() || raw_name == "." || raw_name == ".." {
-        "update.bin"
-    } else {
-        raw_name
-    };
-    let dest_path = tmp_dir.join(file_name);
+    let file_name =
+        if raw_name.is_empty() || raw_name == "." || raw_name == ".." || raw_name.contains('\\') {
+            "update.bin"
+        } else {
+            raw_name
+        };
+    let dest_path = dest_dir.join(file_name);
     let signature = asset.signature.clone();
 
     tracing::info!(

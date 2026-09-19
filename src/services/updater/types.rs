@@ -99,22 +99,24 @@ pub(crate) fn platform_key() -> String {
     format!("{os}-{arch}")
 }
 
-// Native-only: `std::env::temp_dir()` panics at runtime on
-// wasm32-unknown-unknown ("no filesystem on this platform"), and both callers
-// (apply_update / check_pending_swap) are wasm no-ops.
+// Native-only: file paths panic at runtime on wasm32-unknown-unknown, and
+// both callers (apply_update / check_pending_swap) are wasm no-ops.
+
+/// App-owned downloads + swap directory under the user's data dir, so the
+/// write target is not a world-shared, attacker-creatable temp path.
+/// `None` (no data dir / cannot create it) fails closed.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn pending_swap_path() -> PathBuf {
-    crate::platform::filesystem::paths::project_dirs()
-        .map(|pd| {
-            let dir = pd.data_dir().join("updates");
-            let _ = std::fs::create_dir_all(&dir);
-            dir.join("pending-swap.json")
-        })
-        .unwrap_or_else(|| {
-            let dir = std::env::temp_dir().join("gpui-starter-updates");
-            let _ = std::fs::create_dir_all(&dir);
-            dir.join("pending-swap.json")
-        })
+pub(crate) fn updates_dir() -> Option<PathBuf> {
+    let dir = crate::platform::filesystem::paths::project_dirs()?
+        .data_dir()
+        .join("updates");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn pending_swap_path() -> Option<PathBuf> {
+    Some(updates_dir()?.join("pending-swap.json"))
 }
 
 pub(crate) fn current_app_version() -> String {
