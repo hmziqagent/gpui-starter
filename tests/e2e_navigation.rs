@@ -24,6 +24,7 @@ fn test_sidebar_pages_exist() {
         Page::Diagnostics,
         Page::QueryPlayground,
         Page::QueryDevToolsV2,
+        Page::ErrorPlayground,
         Page::About,
     ];
 
@@ -110,10 +111,8 @@ fn test_route_parsing() {
 // View construction
 // ---------------------------------------------------------------------------
 
-/// Confirm that SettingsPage is publicly exported and its type can be
-/// referenced. Full construction requires a GPUI window context (Theme,
-/// LocaleState, and NativeNotificationState globals), so this test verifies
-/// the route resolves to the Settings page and the module is importable.
+/// SettingsPage is exported with the expected constructor; full construction
+/// needs GPUI globals this test deliberately avoids.
 #[test]
 fn test_settings_page_loads() {
     // Verify the route parses correctly.
@@ -121,14 +120,10 @@ fn test_settings_page_loads() {
     assert_eq!(route, AppRoute::Page(Page::Settings));
     assert_eq!(route.page_for_render(), Page::Settings);
 
-    // Verify the view type is exported and constructible in a GPUI context.
-    // SettingsPage::new(window, cx) requires Theme, LocaleState, and
-    // NativeNotificationState globals, so we confirm the type resolves.
+    // Compile-time check of the constructor signature only.
     let _type_check: fn() = || {
         fn _assert_settings_page_constructible() {
-            // This function exists solely to prove the type is public and
-            // has the expected constructor signature at compile time.
-            // Runtime construction requires a full GPUI window context.
+            // Compile-time proof of the public constructor signature.
             let _: fn(
                 &mut gpui::Window,
                 &mut gpui::Context<gpui_starter::views::SettingsPage>,
@@ -137,8 +132,7 @@ fn test_settings_page_loads() {
     };
 }
 
-/// AboutPage is a zero-argument struct.  The test confirms the type is
-/// publicly exported and can be instantiated without a GPUI context.
+/// AboutPage is a zero-argument struct, instantiable without GPUI context.
 #[test]
 fn test_about_page_loads() {
     let _page = gpui_starter::views::AboutPage::new();

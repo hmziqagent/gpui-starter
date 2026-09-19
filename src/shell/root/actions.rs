@@ -10,9 +10,7 @@ pub struct NavigateToPage(pub usize);
 #[action(namespace = app, no_json)]
 pub struct RefreshPage;
 
-/// Returns `true` when the given locale string corresponds to an RTL script.
-///
-/// Recognized RTL locales: Arabic (ar*), Hebrew (he*), Farsi (fa*), Urdu (ur*).
+/// True for RTL script locales: Arabic, Hebrew, Farsi, Urdu.
 pub(crate) fn is_rtl_locale(locale: &str) -> bool {
     locale
         .split('-')

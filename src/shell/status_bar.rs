@@ -112,9 +112,7 @@ fn truncate_error(s: &str, max_len: usize) -> &str {
 // Dev-only frame-time readout
 // ---------------------------------------------------------------------------
 
-/// Renders a small frame-time label in the status bar. Only compiled into debug
-/// builds. Further gated by the `show_frame_time` setting so devs can toggle it
-/// at runtime from the Settings page.
+/// Frame-time label; debug builds only, toggled by `show_frame_time`.
 #[cfg(debug_assertions)]
 fn render_frame_time(cx: &App) -> Option<gpui::Div> {
     if !crate::app_state::with_config(cx, |c| c.show_frame_time) {

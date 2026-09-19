@@ -1,8 +1,5 @@
-// No recursion_limit override. The previous `8192` was not a real need — it let a
-// `#[test]` → `gpui::test` glob-shadow recursion run deep enough to overflow rustc's
-// stack (SIGSEGV), which RUST_MIN_STACK=512MiB then papered over. That shadow is fixed
-// at the test-module call sites, so the default limit (128) is sufficient and no
-// RUST_MIN_STACK is required. See the comments in *.test.rs for the mechanism.
+// No recursion_limit override: the old 8192 value only papered over a #[test] ->
+// gpui::test glob-shadow stack overflow, which is fixed at its call sites.
 #![allow(
     clippy::map_unwrap_or,
     clippy::let_unit_value,
@@ -33,8 +30,6 @@ pub mod runtime;
 pub mod services;
 pub mod shell;
 pub mod state;
-#[cfg(test)]
-pub mod testing;
 pub mod ui;
 // Entry points: shared cfg-neutral `bootstrap` (used by src/main.rs) plus the
 // wasm-only `#[wasm_bindgen(start)]` entry. See src/web.rs.
@@ -62,6 +57,6 @@ pub use services::{
     updater,
 };
 pub use shell::route as routes;
-pub use shell::{app_menu, menus, root, sidebar, status_bar, title_bar};
+pub use shell::{menus, root, sidebar, status_bar, title_bar};
 pub use state::config_store as app_state;
 pub use state::migrations as config_migrations;

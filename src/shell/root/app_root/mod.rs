@@ -11,12 +11,8 @@ impl Focusable for AppRoot {
     }
 }
 
-/// Flush any pending window bounds to disk immediately.
-///
-/// Reads the current platform window bounds and persists them, bypassing the
-/// debounce timer. Safe to call even when no window is open. Called from the
-/// `Quit` action handler so that the final window position is persisted even
-/// when the debounce timer has not yet fired.
+/// Persist current window bounds immediately, bypassing the debounce; no-op
+/// without an open window. Called from the `Quit` handler.
 pub fn flush_window_bounds(cx: &mut App) {
     let Some(window_handle) = cx.active_window() else {
         return;

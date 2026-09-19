@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 #[cfg(not(target_family = "wasm"))]
 use std::io::Write;
@@ -25,16 +23,23 @@ use crate::{
 #[cfg(not(target_family = "wasm"))]
 use crate::paths::ensure_parent_dir;
 
-/// Duration (in milliseconds) to wait after the last config mutation before
-/// flushing to disk. Rapid successive calls to [`update_config`] are coalesced
-/// into a single write.
+/// Wait after the last config mutation before flushing, so bursts of
+/// `update_config` calls coalesce into a single write.
 const DEBOUNCE_MS: u64 = 300;
+
+/// Upper bound for the state file. A larger file is corrupt by definition, and
+/// parsing it would allocate unbounded memory from untrusted input at startup.
+#[cfg(not(target_family = "wasm"))]
+const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
 
 pub const APP_STATE_VERSION: u32 = 1;
 
-/// Shared flag that coordinates the debounce timer. When a save is already
-/// scheduled, the flag is `true` and the timer loop simply resets its wait.
-/// This avoids spawning multiple concurrent debounce tasks.
+/// Bounds beyond this cannot be a real window on any display; they indicate a
+/// corrupt file. Generous enough that exotic multi-monitor spans still persist.
+const MAX_PLAUSIBLE_DIM: f32 = 100_000.0;
+
+/// Set while a debounce timer is armed, so concurrent mutations reuse the
+/// pending timer instead of spawning another one.
 static SAVE_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 pub struct AppState {
@@ -42,15 +47,11 @@ pub struct AppState {
     pub config: AppConfig,
     pub last_load_error: Option<String>,
     pub last_save_error: Option<String>,
-    /// Tracks whether the in-memory config has changed since the last disk flush.
     dirty: bool,
-    /// The serialized bytes of the last successfully persisted config. Used for
-    /// dirty-checking: if a new serialization matches, we skip the write entirely.
+    // Serialized bytes of the last successful flush; lets identical states skip the write.
     last_flushed_bytes: Vec<u8>,
-    /// Handle to the most recently armed debounce flush task. Keeping it bound
-    /// (rather than `detach`-ing) lets [`force_save`] drop it on shutdown,
-    /// cancelling any queued background write so it cannot reorder stale bytes
-    /// beneath the synchronous shutdown flush. Dropping a `Task` cancels it.
+    // Bound debounce task; dropped on shutdown so it cannot commit stale bytes
+    // beneath the synchronous flush (dropping a `Task` cancels it).
     in_flight_save: Option<gpui::Task<()>>,
 }
 
@@ -78,8 +79,7 @@ pub struct AppConfig {
     pub update_channel: String,
     #[serde(default)]
     pub last_update_check: Option<String>,
-    /// Show the dev-only frame-time readout in the status bar.
-    /// Defaults to `true` in debug builds, `false` in release builds.
+    /// Dev-only frame-time readout in the status bar; on by default in debug builds.
     #[serde(default = "default_show_frame_time")]
     pub show_frame_time: bool,
 }
@@ -90,6 +90,21 @@ pub struct PersistedWindowBounds {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+impl PersistedWindowBounds {
+    /// Finite, positive dimensions within the corruption ceiling; negative
+    /// x/y stay legal (multi-monitor).
+    fn is_plausible(&self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && self.width > 0.0
+            && self.height > 0.0
+            && self.width <= MAX_PLAUSIBLE_DIM
+            && self.height <= MAX_PLAUSIBLE_DIM
+    }
 }
 
 impl Default for AppConfig {
@@ -116,12 +131,19 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Canonical locale/version, and drop window bounds a corrupt file could
+    /// have planted so window creation always sees usable values.
     pub fn normalized(mut self) -> Self {
         if self.version == 0 {
             self.version = APP_STATE_VERSION;
         }
         if self.locale != LOCALE_EN && self.locale != LOCALE_ZH_CN {
             self.locale = LOCALE_EN.to_string();
+        }
+        if let Some(bounds) = &self.window_bounds
+            && !bounds.is_plausible()
+        {
+            self.window_bounds = None;
         }
         self
     }
@@ -135,7 +157,7 @@ fn default_stable() -> String {
     "stable".to_string()
 }
 
-/// Default for `show_frame_time`: enabled in debug builds, disabled in release.
+/// Debug builds ship with the frame-time readout enabled.
 fn default_show_frame_time() -> bool {
     cfg!(debug_assertions)
 }
@@ -143,7 +165,7 @@ fn default_show_frame_time() -> bool {
 pub fn initialize(cx: &mut App) {
     let paths = match AppPaths::new() {
         Ok(paths) => paths,
-        // wasm has no OS standard directories — degrade to the in-memory
+        // wasm has no OS standard directories; degrade to the in-memory
         // fallback (default config, no disk persistence) instead of bailing.
         #[cfg(target_family = "wasm")]
         Err(_) => AppPaths::fallback(),
@@ -191,21 +213,14 @@ pub fn config(cx: &App) -> AppConfig {
         .unwrap_or_default()
 }
 
-/// Borrow the active [`AppConfig`] without cloning the whole struct.
-///
-/// Returns `None` only if [`initialize`] has not yet run. Prefer this — or
-/// [`with_config`] — over [`config`] in render paths that only need to read a
-/// field or two (e.g. the per-frame status-bar readout), so the full `AppConfig`
-/// (now carrying `notification_inbox`, two permission `HashSet`s, …) is not
-/// deep-cloned every frame.
+/// Borrow the active [`AppConfig`] without cloning the whole struct; prefer
+/// this (or [`with_config`]) over [`config`] in render paths.
 pub fn config_handle(cx: &App) -> Option<&AppConfig> {
     cx.try_global::<AppState>().map(|s| &s.config)
 }
 
-/// Run a closure with borrowed access to the active [`AppConfig`].
-///
-/// Falls back to [`AppConfig::default`] when the global is not yet installed,
-/// so callers never need to handle the absent case themselves.
+/// Run a closure with borrowed access to the active [`AppConfig`], falling
+/// back to the default when [`initialize`] has not run.
 pub fn with_config<R>(cx: &App, f: impl FnOnce(&AppConfig) -> R) -> R {
     match cx.try_global::<AppState>() {
         Some(state) => f(&state.config),
@@ -213,8 +228,7 @@ pub fn with_config<R>(cx: &App, f: impl FnOnce(&AppConfig) -> R) -> R {
     }
 }
 
-/// Convenience field getter: returns just the configured update channel,
-/// cloning the cheap `String` rather than the whole `AppConfig`.
+/// Convenience getter cloning just the update channel instead of the config.
 pub fn update_channel(cx: &App) -> String {
     with_config(cx, |c| c.update_channel.clone())
 }
@@ -237,14 +251,8 @@ pub fn paths(cx: &App) -> AppPaths {
         })
 }
 
-/// Mutates the application config and schedules a debounced save.
-///
-/// The mutation closure runs synchronously. Instead of immediately writing to
-/// disk, the config is marked dirty and a delayed save is scheduled. If another
-/// call arrives before the timer fires, the flag is already set and the two
-/// updates are coalesced into a single I/O operation.
-///
-/// For immediate persistence (e.g. during shutdown), use [`force_save`].
+/// Mutate the config and schedule a debounced, coalesced save; the closure
+/// runs synchronously. Use [`force_save`] for immediate persistence.
 pub fn update_config(cx: &mut App, update: impl FnOnce(&mut AppConfig)) {
     if cx.try_global::<AppState>().is_none() {
         tracing::warn!(target: "gpui_starter::app_state", "attempted to update app state before initialization");
@@ -257,33 +265,23 @@ pub fn update_config(cx: &mut App, update: impl FnOnce(&mut AppConfig)) {
         state.dirty = true;
     });
 
-    // Arm the debounced flush (no-op if one is already scheduled). The task
-    // handle is recorded on state so the shutdown path can cancel it.
     arm_debounce(cx);
 }
 
-/// Flushes any pending config changes to disk immediately.
-///
-/// Call this during shutdown to ensure no configuration is lost. If the config
-/// is not dirty, this is a no-op.
+/// Flush pending config changes to disk immediately; a no-op when clean.
+/// Called on the shutdown path, where the debounced write cannot fire.
 pub fn force_save(cx: &mut App) {
     if cx.try_global::<AppState>().is_none() {
         return;
     }
 
-    // Clear any pending debounce timer.
     SAVE_SCHEDULED.store(false, Ordering::Relaxed);
 
-    // Shutdown path: write synchronously. We cannot yield from here and risk
-    // the process exiting before the write lands, so the atomic write + fsync
-    // stays inline. (The debounced hot path in `update_config` is the one that
-    // moves fsync off the UI thread.)
+    // Shutdown: write synchronously (the process must not exit before the
+    // write lands); the debounced hot path keeps fsync off the UI thread.
     cx.update_global::<AppState, _>(|state, _cx| {
-        // Cancel any in-flight background save first: clearing the field drops
-        // the task handle, which cancels the debounce task (and any
-        // not-yet-started background write) so its commit step cannot race our
-        // synchronous write below and a queued write cannot reorder stale
-        // bytes beneath ours.
+        // Drop the debounce task first so it cannot race or reorder beneath
+        // the synchronous write below.
         state.in_flight_save = None;
 
         if !state.dirty {
@@ -291,23 +289,15 @@ pub fn force_save(cx: &mut App) {
         }
         if let Some((path, bytes)) = prepare_flush(state) {
             let result = save_config(&path, &bytes);
-            // commit_flush signals re-arm on a stale write; on the shutdown
-            // path there is nothing to re-arm, so ignore the flag.
+            // Nothing to re-arm on the shutdown path.
             let _ = commit_flush(state, bytes, result);
         }
     });
 }
 
-/// Arms the debounced flush timer (if one is not already armed) and records
-/// the resulting task on `AppState::in_flight_save` so [`force_save`] can
-/// cancel it on shutdown.
-///
-/// The `SAVE_SCHEDULED` compare_exchange guarantees at most one debounce timer
-/// is in flight at a time — repeated calls while armed are coalesced into the
-/// existing timer. Safe to call from the UI thread; the heavy I/O runs on the
-/// background executor.
+/// Arm the debounced flush timer unless one is already pending; the
+/// `SAVE_SCHEDULED` compare_exchange keeps at most one timer in flight.
 fn arm_debounce(cx: &mut App) {
-    // Only spawn a new debounce task if one is not already scheduled.
     if SAVE_SCHEDULED
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
@@ -320,7 +310,7 @@ fn arm_debounce(cx: &mut App) {
         bg.timer(std::time::Duration::from_millis(DEBOUNCE_MS))
             .await;
 
-        // Clear the flag so the next update_config can schedule a fresh timer.
+        // Allow the next update_config to schedule a fresh timer.
         SAVE_SCHEDULED.store(false, Ordering::Relaxed);
 
         // Step 1 (UI thread): serialize + dirty-check. No I/O here.
@@ -337,16 +327,14 @@ fn arm_debounce(cx: &mut App) {
             return;
         };
 
-        // Step 2 (background thread): atomic write + fsync. The UI thread
-        // never blocks on disk I/O.
+        // Step 2 (background thread): atomic write + fsync.
         let write_bytes = bytes.clone();
         let result = bg
             .spawn(async move { save_config(&path, &write_bytes) })
             .await;
 
-        // Step 3 (UI thread): apply the result to in-memory state. If the
-        // write landed stale, commit_flush signals re-arm so the current
-        // (correct) bytes are re-flushed on the next debounce.
+        // Step 3 (UI thread): a stale write signals re-arm so the current
+        // bytes are re-flushed on the next debounce.
         cx.update(|cx| {
             let needs_rearm =
                 cx.update_global::<AppState, _>(|state, _cx| commit_flush(state, bytes, result));
@@ -356,22 +344,12 @@ fn arm_debounce(cx: &mut App) {
         });
     });
 
-    // Track on state so the shutdown path can cancel any in-flight write.
-    // Overwriting a still-bound handle cancels the superseded task.
     cx.update_global::<AppState, _>(|state, _cx| {
         state.in_flight_save = Some(task);
     });
 }
 
-/// Serializes the config and runs the dirty-check.
-///
-/// Uses compact JSON (`serde_json::to_vec`) instead of pretty-printed JSON to
-/// reduce I/O volume (~30% fewer bytes). Returns `Some((path, bytes))` when a
-/// write is actually needed, or `None` if the config is clean / byte-identical
-/// to the last successful flush. Serialization failures are recorded on
-/// `state.last_save_error` and yield `None`.
-///
-/// This runs on the UI thread — it does no I/O, only serialization.
+/// Serialize on the UI thread (no I/O); `None` when clean or on failure.
 fn prepare_flush(state: &mut AppState) -> Option<(PathBuf, Vec<u8>)> {
     let new_bytes = match serde_json::to_vec(&state.config) {
         Ok(bytes) => bytes,
@@ -387,35 +365,16 @@ fn prepare_flush(state: &mut AppState) -> Option<(PathBuf, Vec<u8>)> {
         }
     };
 
-    // Dirty-check: if the serialized form is identical to what is already on
-    // disk, skip the atomic write entirely.
     if new_bytes == state.last_flushed_bytes {
         state.dirty = false;
-        tracing::debug!(
-            target: "gpui_starter::app_state",
-            "config unchanged after normalization; skipping write"
-        );
         return None;
     }
 
     Some((state.paths.state_file.clone(), new_bytes))
 }
 
-/// Applies the outcome of a [`save_config`] call to the in-memory state.
-///
-/// On success, marks the state clean and records the flushed bytes — but only
-/// if the in-memory config still serializes to the same bytes we just wrote.
-/// That guard handles the race where a `update_config` mutation lands while the
-/// write is in flight on the background thread, AND the harder case where two
-/// debounce writes overlap and the older one's bytes reorder beneath the newer
-/// one's commit: instead of trusting the stale write, we re-mark `dirty = true`
-/// and return `true` so the caller re-arms the debounce and re-flushes the
-/// current (correct) bytes. Without the re-arm, a concurrent `commit_flush`
-/// could already have cleared `dirty`, leaving the stale on-disk bytes to
-/// survive until restart — silent config loss. On failure, `last_save_error`
-/// is set and the state stays dirty so the next debounce retries.
-///
-/// Returns `true` when the caller should re-arm the debounce (stale write).
+/// Apply a [`save_config`] outcome; `true` means a stale write (mutation
+/// mid-flight or reordered commits) re-marked dirty — re-arm the debounce.
 fn commit_flush(
     state: &mut AppState,
     written_bytes: Vec<u8>,
@@ -435,10 +394,8 @@ fn commit_flush(
                 );
                 false
             } else {
-                // Stale write: a mutation landed during flight, or a competing
-                // concurrent write reordered beneath us. Force a re-flush of
-                // the current bytes — do NOT trust this write, and do NOT let
-                // a prior concurrent clean commit keep `dirty = false`.
+                // Stale write: re-flush the current bytes, and don't let a
+                // concurrent clean commit keep `dirty = false`.
                 state.dirty = true;
                 tracing::debug!(
                     target: "gpui_starter::app_state",
@@ -460,10 +417,34 @@ fn commit_flush(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn load_config(path: &Path) -> (AppConfig, Option<String>) {
+    // Cap untrusted input before reading: serde on an oversized file would
+    // allocate unbounded memory at startup.
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() > MAX_STATE_FILE_BYTES
+    {
+        quarantine_bad_config(path);
+        return (
+            AppConfig::default(),
+            Some(
+                AppError::StateParse {
+                    path: path.to_path_buf(),
+                    details: format!("file exceeds the {MAX_STATE_FILE_BYTES}-byte cap"),
+                }
+                .to_string(),
+            ),
+        );
+    }
+
     match std::fs::read_to_string(path) {
         Ok(json) => match serde_json::from_str::<AppConfig>(&json) {
-            Ok(config) => (crate::config_migrations::migrate(config).normalized(), None),
+            Ok(config) => {
+                let config = crate::config_migrations::migrate(config).normalized();
+                // Log-only tier: lints surface unusable-but-loadable values.
+                crate::state::config_validation::validate_config(&config);
+                (config, None)
+            }
             Err(err) => {
                 quarantine_bad_config(path);
                 (
@@ -492,7 +473,7 @@ fn load_config(path: &Path) -> (AppConfig, Option<String>) {
     }
 }
 
-/// Writes pre-serialized bytes to the config file using an atomic write.
+/// Write pre-serialized bytes atomically.
 fn save_config(path: &Path, json_bytes: &[u8]) -> Result<(), AppError> {
     // wasm has no writable config directory (fallback path is empty) — treat
     // persistence as a no-op so the in-memory config stays authoritative.
@@ -528,6 +509,7 @@ fn save_config(path: &Path, json_bytes: &[u8]) -> Result<(), AppError> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn quarantine_bad_config(path: &Path) {
     if !path.exists() {
         return;

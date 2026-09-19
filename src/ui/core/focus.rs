@@ -1,21 +1,14 @@
 use gpui::{App, Context, FocusHandle, Focusable, Subscription, Window};
 
-/// Manages focus for a view with automatic blur handling.
-///
-/// Wraps a single [`FocusHandle`] together with an optional blur
-/// [`Subscription`] so feature pages can request focus and react to focus loss
-/// without each managing their own bookkeeping. Designed to be held as a field
-/// on a GPUI view (`Context<V>`).
+/// A [`FocusHandle`] plus its blur [`Subscription`], held as a view field so
+/// pages don't re-derive focus bookkeeping.
 pub struct FocusManager {
     focus_handle: FocusHandle,
     blur_subscription: Option<Subscription>,
 }
 
 impl FocusManager {
-    /// Create a new focus manager bound to `cx`'s focus handle pool.
-    ///
-    /// Generic over the owning view `T` so it can be constructed inside any
-    /// `Context<T>` (matching `cx.focus_handle()`).
+    /// Create a manager bound to `cx`'s focus handle pool.
     pub fn new<T>(cx: &mut Context<T>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -28,11 +21,8 @@ impl FocusManager {
         &self.focus_handle
     }
 
-    /// Subscribe to blur events (when focus is lost).
-    ///
-    /// The callback receives the view, the window, and the context, mirroring
-    /// [`Context::on_blur`]. Calling this replaces any previously registered
-    /// blur subscription. Returns `&mut self` for builder-style chaining.
+    /// Subscribe to blur events; replaces any prior subscription. Returns
+    /// `&mut self` for chaining.
     pub fn on_blur<V, F>(
         &mut self,
         window: &mut Window,

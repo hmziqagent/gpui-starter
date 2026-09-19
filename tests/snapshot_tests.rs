@@ -1,10 +1,5 @@
-//! Snapshot tests using [`insta`] for core serialisable structures.
-//!
-//! Each test is independent. Run with:
-//!
-//!     cargo test --test snapshot_tests
-//!
-//! Review / accept snapshots with `cargo insta review`.
+//! Snapshot tests (insta, inline snapshots) for core serialisable structures.
+//! `cargo insta review` rewrites the inline bodies after intentional changes.
 
 use std::collections::HashSet;
 
@@ -30,7 +25,28 @@ fn theme_dir() -> std::path::PathBuf {
 #[test]
 fn test_config_default_serialization() {
     let config = AppConfig::default();
-    insta::assert_yaml_snapshot!("config_default", &config);
+    insta::assert_yaml_snapshot!(
+            &config,
+    @r#"
+        version: 1
+        theme: Default Light
+        scrollbar_show: ~
+        locale: en
+        active_route:
+          Page: Home
+        sidebar_collapsed: false
+        native_notifications_enabled: true
+        global_shortcut_enabled: true
+        first_run_completed: false
+        notification_inbox: []
+        window_bounds: ~
+        granted_permissions: []
+        denied_permissions: []
+        update_channel: stable
+        last_update_check: ~
+        show_frame_time: true
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +89,34 @@ fn test_config_roundtrip() {
             values.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
         }
     }
-    insta::assert_yaml_snapshot!("config_roundtrip", &snapshot);
+    insta::assert_yaml_snapshot!(
+            &snapshot,
+    @r#"
+        version: 1
+        theme: Gruvbox Dark
+        scrollbar_show: ~
+        locale: en
+        active_route:
+          Page: Settings
+        sidebar_collapsed: true
+        native_notifications_enabled: false
+        global_shortcut_enabled: true
+        first_run_completed: true
+        notification_inbox: []
+        window_bounds:
+          x: 100
+          y: 200
+          width: 800
+          height: 600
+        granted_permissions:
+          - camera
+          - microphone
+        denied_permissions: []
+        update_channel: stable
+        last_update_check: ~
+        show_frame_time: false
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +151,27 @@ fn test_route_parse_valid() {
         })
         .collect();
 
-    insta::assert_yaml_snapshot!("route_parse_valid", &results);
+    insta::assert_yaml_snapshot!(
+            &results,
+    @r#"
+        - - "gpui-starter://home"
+          - Page(Home)
+        - - "gpui-starter://form"
+          - Page(Form)
+        - - "gpui-starter://settings"
+          - Page(Settings)
+        - - "gpui-starter://notifications"
+          - Page(Notifications)
+        - - "gpui-starter://diagnostics"
+          - Page(Diagnostics)
+        - - "gpui-starter://about"
+          - Page(About)
+        - - "gpui-starter://settings/notifications"
+          - SettingsNotifications
+        - - "gpui-starter://home?ref=test&source=menu"
+          - Page(Home)
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +197,23 @@ fn test_route_parse_invalid() {
         })
         .collect();
 
-    insta::assert_yaml_snapshot!("route_parse_invalid", &results);
+    insta::assert_yaml_snapshot!(
+            &results,
+    @r#"
+        - - "https://example.com"
+          - "invalid deep link `https://example.com`: unsupported scheme `https`, expected `gpui-starter`"
+        - - "gpui-starter://unknown-host"
+          - "invalid deep link `gpui-starter://unknown-host`: unexpected host `unknown-host`"
+        - - "gpui-starter://home/extra"
+          - "invalid deep link `gpui-starter://home/extra`: unknown route"
+        - - not-a-url-at-all
+          - "invalid deep link `not-a-url-at-all`: relative URL without a base"
+        - - "gpui-starter://settings/..%2Fetc"
+          - "invalid deep link `..%2Fetc`: path traversal detected in URL segment"
+        - - ""
+          - "invalid deep link ``: relative URL without a base"
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +281,26 @@ fn test_theme_structure() {
             .collect(),
     };
 
-    insta::assert_yaml_snapshot!("theme_gruvbox_structure", &summary);
+    insta::assert_yaml_snapshot!(
+            &summary,
+    @r#"
+        name: Gruvbox
+        author: Pavel Pertsev
+        theme_count: 2
+        theme_names:
+          - Gruvbox Light
+          - Gruvbox Dark
+        theme_modes:
+          - light
+          - dark
+        color_key_count_per_theme:
+          - 46
+          - 42
+        highlight_key_count_per_theme:
+          - 21
+          - 21
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +324,18 @@ fn test_update_manifest_serialization() {
         platforms,
     };
 
-    insta::assert_yaml_snapshot!("update_manifest", &manifest);
+    insta::assert_yaml_snapshot!(
+            &manifest,
+    @r#"
+        version: 2.0.0
+        release_notes: Major release with new features.
+        platforms:
+          macos-aarch64:
+            url: "https://releases.example.com/app-2.0.0.tar.gz"
+            signature: deadbeef
+            size: 42000000
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +373,28 @@ fn test_update_status_serialization() {
         error: UpdateStatus::Error("network timeout".to_string()),
     };
 
-    insta::assert_yaml_snapshot!("update_status_variants", &variants);
+    insta::assert_yaml_snapshot!(
+            &variants,
+    @r#"
+        idle: Idle
+        checking: Checking
+        up_to_date: UpToDate
+        available:
+          Available:
+            version: 2.0.0
+            notes: Bug fixes
+        downloading:
+          Downloading:
+            progress: 42
+        downloaded:
+          Downloaded:
+            version: 2.0.0
+            path: /tmp/update.tar.gz
+        ready_to_install: ReadyToInstall
+        error:
+          Error: network timeout
+        "#
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -287,5 +417,18 @@ fn test_update_snapshot_serialization() {
         cached_asset: None,
     };
 
-    insta::assert_yaml_snapshot!("update_snapshot", &snapshot);
+    insta::assert_yaml_snapshot!(
+            &snapshot,
+    @r#"
+        status:
+          Available:
+            version: 2.1.0
+            notes: New features
+        current_version: 2.0.0
+        last_check: "2026-06-04T12:00:00Z"
+        update_channel: stable
+        check_retry_count: 0
+        download_retry_count: 0
+        "#
+        );
 }

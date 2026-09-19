@@ -10,7 +10,7 @@ use gpui_component::{
 };
 
 use crate::app::{SelectFont, SelectRadius};
-use crate::app_menu;
+use crate::menus;
 
 pub struct AppTitleBar {
     app_menu_bar: Entity<AppMenuBar>,
@@ -23,7 +23,7 @@ impl AppTitleBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let app_menu_bar = app_menu::init(title, cx);
+        let app_menu_bar = menus::init(title, cx);
         let settings = cx.new(|cx| SettingsDropdown::new(window, cx));
 
         Self {
@@ -41,9 +41,7 @@ impl Render for AppTitleBar {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(self.app_menu_bar.clone())
-                    // Step 1: just an empty div — does this hang?
-                    .child(div()),
+                    .child(self.app_menu_bar.clone()),
             )
             .child(
                 div()
@@ -53,7 +51,6 @@ impl Render for AppTitleBar {
                     .px_2()
                     .gap_2()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(div())
                     .child(
                         Label::new("theme:")
                             .secondary(cx.theme().theme_name())

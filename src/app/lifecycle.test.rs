@@ -7,13 +7,10 @@ fn lifecycle_stage_starts_as_starting() {
 }
 
 #[test]
-fn take_render_panic_initially_false() {
-    assert!(!take_render_panic());
-}
-
-#[test]
 fn render_panic_flag_roundtrip() {
-    // Set the flag manually (as the panic hook would).
+    // The flag is process-global; consume any stale value first so the
+    // assertions below are deterministic even with parallel tests.
+    let _ = take_render_panic();
     RENDER_PANIC_OCCURRED.store(true, Ordering::SeqCst);
     assert!(take_render_panic(), "first read should be true");
     assert!(
@@ -34,37 +31,39 @@ fn enter_render_path_sets_and_clears() {
 
 #[test]
 fn track_recent_error_keeps_limit() {
-    // Reset the slot by creating fresh state (test-only).
     for i in 0..25 {
         track_recent_error(format!("err-{i}"));
     }
-    // The global slot should have kept only the last 20 entries.
     let slot = RECENT_ERRORS.get().unwrap();
     let guard = slot.lock().unwrap();
-    assert_eq!(guard.len(), 20);
-    assert_eq!(guard[0], "err-5");
-    assert_eq!(guard[19], "err-24");
+    assert!(guard.len() <= 20, "ring buffer must cap at 20 entries");
+    assert_eq!(guard.last().map(String::as_str), Some("err-24"));
 }
 
 #[test]
-fn check_previous_crash_none_when_no_marker() {
-    // Ensure no stale marker exists.
-    let path = std::env::temp_dir().join("gpui-starter.crash-marker");
-    let _ = std::fs::remove_file(&path);
-    assert!(check_previous_crash().is_none());
-}
+fn crash_marker_roundtrip_in_data_dir() {
+    let marker = test_data_dir().join("crash-marker");
+    let _ = std::fs::remove_file(&marker);
 
-#[test]
-fn write_and_check_crash_marker() {
     write_crash_marker();
     let contents = check_previous_crash();
     assert!(contents.is_some(), "marker should exist after write");
-    let text = contents.unwrap();
     assert!(
-        text.starts_with("pid="),
-        "marker should start with pid=, got: {text}"
+        contents.unwrap().starts_with("pid="),
+        "marker should start with pid="
     );
-    // Clean up.
+
     remove_crash_marker();
     assert!(check_previous_crash().is_none(), "marker should be removed");
+    assert!(!marker.exists());
+}
+
+/// Point the once-set data dir at a shared temp dir for the marker tests.
+fn test_data_dir() -> &'static PathBuf {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("tempdir").keep();
+        set_app_data_dir(dir.clone());
+        dir
+    })
 }

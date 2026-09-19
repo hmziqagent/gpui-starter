@@ -28,9 +28,8 @@ pub struct AppRoot {
     pub(crate) query_devtools_v2_page: Entity<QueryDevToolsV2Page>,
     pub(crate) about_page: Entity<AboutPage>,
 
-    /// Error boundary: when `true`, the error fallback view is shown instead
-    /// of the active page. Set when a render panic is detected; cleared when
-    /// the user clicks "Reload Page".
+    /// When true, the error fallback view replaces the active page; set on a
+    /// render panic, cleared by "Reload Page" or navigation.
     pub(crate) render_error: bool,
     /// Cached error-boundary entity so we don't re-create it every frame.
     pub(crate) error_page: Option<Entity<RenderErrorPage>>,
@@ -127,10 +126,7 @@ impl AppRoot {
         notify_on::<crate::notifications::inbox::NotificationInboxState>(cx).detach();
         notify_on::<crate::connectivity::ConnectivitySnapshot>(cx).detach();
         notify_on::<crate::session::SessionSnapshot>(cx).detach();
-        // Persist window bounds on move/resize. `app_state::update_config` (the
-        // config_store) already debounces (~300 ms) and coalesces bursts into a
-        // single write, so we hand it the latest bounds directly instead of
-        // stacking a second debounce here.
+        // update_config already debounces; hand it the latest bounds directly.
         cx.observe_window_bounds(window, |_, window, cx| {
             let bounds = window.window_bounds().get_bounds();
             let persisted = crate::app_state::PersistedWindowBounds {
@@ -145,7 +141,9 @@ impl AppRoot {
         })
         .detach();
 
-        let config = crate::app_state::config(cx);
+        // Borrow instead of cloning the whole AppConfig.
+        let (active_route, collapsed) =
+            crate::app_state::with_config(cx, |c| (c.active_route.clone(), c.sidebar_collapsed));
 
         // Keyboard shortcuts: Cmd+1..9 to jump to sidebar pages.
         let pages = Page::all();
@@ -170,8 +168,8 @@ impl AppRoot {
         Self {
             focus_handle: cx.focus_handle(),
             title_bar,
-            active_route: config.active_route,
-            collapsed: config.sidebar_collapsed,
+            active_route,
+            collapsed,
             home_page,
             form_page,
             settings_page,
@@ -186,13 +184,8 @@ impl AppRoot {
         }
     }
 
-    /// Return the page view to render, considering the error boundary.
-    ///
-    /// If a render panic was detected since the last frame (via
-    /// [`crate::app::lifecycle::take_render_panic`]), we swap in the
-    /// [`RenderErrorPage`] fallback instead of the crashing page. The user can
-    /// dismiss the error boundary with the "Reload Page" button (or by
-    /// navigating to a different route), which clears the flag and retries.
+    /// Page view with error-boundary handling: a render panic since the last
+    /// frame swaps in [`RenderErrorPage`]; navigation or "Reload Page" clears it.
     pub(crate) fn active_page_view(&mut self, cx: &mut Context<Self>) -> AnyView {
         // Check if a panic occurred since the last render.
         if crate::lifecycle::take_render_panic() {
@@ -240,11 +233,8 @@ impl AppRoot {
         self.active_route = route.clone();
         self.render_error = false;
         self.error_page = None;
-        // Wasm: mirror the navigation into location.hash so the URL stays
-        // bookmarkable and Back steps through in-app navigation. Boot and
-        // back/forward movement use replaceState/no-op inside the router
-        // bridge (src/platform/web/router.rs); pushing here only fires on
-        // genuine in-app navigation.
+        // Wasm: push navigation into location.hash (bookmarkable, Back works);
+        // the router bridge handles boot and back/forward via replaceState.
         #[cfg(target_family = "wasm")]
         crate::platform::web::router::push_route_hash(&route);
         crate::app_state::update_config(cx, |config| {
@@ -254,12 +244,7 @@ impl AppRoot {
     }
 }
 
-/// Install an `observe_global::<T>` that re-renders `AppRoot` whenever `T`
-/// changes.
-///
-/// Several globals only need `cx.notify()` on change; this collapses that
-/// one-liner so each call site is a single line. Returns the [`Subscription`]
-/// (caller detaches it).
+/// Observe global `T` and notify `AppRoot` on change; caller detaches.
 fn notify_on<T: Global>(cx: &mut Context<AppRoot>) -> Subscription {
     cx.observe_global::<T>(|_, cx| {
         cx.notify();
