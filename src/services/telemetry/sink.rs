@@ -31,7 +31,7 @@ pub(super) fn install_otlp_tracer(
 
     let exporter = opentelemetry_otlp::new_exporter()
         .http()
-        .with_endpoint(&format!("{endpoint}/v1/traces"));
+        .with_endpoint(format!("{endpoint}/v1/traces"));
 
     let provider = opentelemetry_otlp::new_pipeline()
         .tracing()
