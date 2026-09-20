@@ -140,9 +140,8 @@ pub fn init(cx: &mut App) {
         gpui_component::Theme::global_mut(cx).apply_config(&theme);
     }
 
-    // Hot reload of themes/ is a dev-checkout convenience. The 0.6.1 watcher
-    // create_dir_all()s a missing dir, so only an existing dir is watched;
-    // release installs have no checkout and skip this without an error.
+    // Hot reload of themes/ is dev-checkout-only: the 0.6.1 watcher
+    // create_dir_all()s missing dirs, so never watch a nonexistent path.
     #[cfg(not(target_family = "wasm"))]
     {
         let themes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes");

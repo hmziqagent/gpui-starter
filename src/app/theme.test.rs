@@ -1,8 +1,7 @@
 use gpui::SharedString;
 
-// No App context here: that needs gpui's test-support feature (a
-// dev-dependency change), so drive load_themes_from_str — the method
-// register_embedded_themes calls — on a default-constructed registry.
+// No App context: gpui's test-support feature is a dev-dependency change,
+// so drive load_themes_from_str (what register_embedded_themes calls).
 
 /// (file, theme names) of every theme inside every embedded themes/*.json.
 fn embedded_theme_names() -> Vec<(SharedString, Vec<SharedString>)> {
