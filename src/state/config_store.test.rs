@@ -15,6 +15,12 @@ fn save_and_load_config_uses_json_state_file() {
 
     let bytes = serde_json::to_vec(&config).unwrap();
     save_config(&state_file, &bytes).unwrap();
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&state_file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "state file must stay user-only");
+    }
     let (loaded, err) = load_config(&state_file);
 
     assert_eq!(err, None);

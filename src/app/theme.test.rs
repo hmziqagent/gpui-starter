@@ -66,3 +66,47 @@ fn embedded_themes_do_not_collide_with_registry_defaults() {
         }
     }
 }
+
+#[test]
+fn restore_reloads_every_embedded_file_into_a_cleared_registry() {
+    // A kit watcher reload clears `themes` back to defaults + dir contents;
+    // a bare registry is the post-clear state with an empty themes/ dir.
+    let mut registry = gpui_component::ThemeRegistry::default();
+    let restored = super::restore_embedded_themes(&mut registry);
+    assert_eq!(restored, crate::app::assets::embedded_themes().len());
+    for (file, names) in embedded_theme_names() {
+        for name in names {
+            assert!(
+                registry.themes().contains_key(&name),
+                "{file}: {name} missing after restore"
+            );
+        }
+    }
+    assert_eq!(
+        super::restore_embedded_themes(&mut registry),
+        0,
+        "a full registry must not be touched again"
+    );
+}
+
+#[test]
+fn restore_reloads_only_files_with_missing_themes() {
+    let mut registry = gpui_component::ThemeRegistry::default();
+    let files = crate::app::assets::embedded_themes();
+    let (head, tail) = files.split_at(files.len() / 2);
+    for (file, json) in head {
+        registry
+            .load_themes_from_str(json)
+            .unwrap_or_else(|err| panic!("{file}: {err}"));
+    }
+
+    assert_eq!(super::restore_embedded_themes(&mut registry), tail.len());
+    for (file, names) in embedded_theme_names() {
+        for name in names {
+            assert!(
+                registry.themes().contains_key(&name),
+                "{file}: {name} missing after partial restore"
+            );
+        }
+    }
+}

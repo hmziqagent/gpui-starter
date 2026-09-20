@@ -108,7 +108,9 @@ impl Launcher {
     }
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
-        let q = self.input.read(cx).value().to_lowercase();
+        // ItemFilter lowercases the query once per pass; handing it the raw
+        // value keeps a single lowercase per keystroke.
+        let q = self.input.read(cx).value();
         let indices = self.filter.filter_indices(self.state.items(), &q);
         self.state.apply_filtered_indices(indices);
         tracing::debug!(

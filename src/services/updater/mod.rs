@@ -28,9 +28,8 @@ pub fn initialize(cx: &mut gpui::App) {
         check::check_for_updates(cx);
     });
 
-    // Self-update is a desktop-only concept (binary swap on disk). Wasm
-    // "updates" ship with the page reload — skip the scheduled checks; the
-    // action handler above still runs and resolves to UpToDate.
+    // Self-update is desktop-only (binary swap on disk); wasm ships updates
+    // with the page reload. The action handler above still runs either way.
     #[cfg(not(target_family = "wasm"))]
     {
         // Startup check after 5 seconds, then re-check every 4 hours. GPUI

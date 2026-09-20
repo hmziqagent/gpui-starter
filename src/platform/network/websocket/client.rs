@@ -29,7 +29,7 @@ mod live {
     /// Only ws/wss are dialable here; the exact-match check keeps
     /// `connect_async` from being aimed at other schemes or handlers.
     #[allow(clippy::result_large_err)]
-    fn validate_ws_url(url: &str) -> Result<(), WebSocketError> {
+    pub(crate) fn validate_ws_url(url: &str) -> Result<(), WebSocketError> {
         let ok = match url.split_once(':') {
             Some((scheme, rest)) => matches!(scheme, "ws" | "wss") && !rest.is_empty(),
             None => false,
@@ -275,6 +275,9 @@ mod live {
 
 #[cfg(feature = "websocket")]
 pub use live::WebSocketClient;
+
+#[cfg(all(test, feature = "websocket"))]
+pub(super) use live::validate_ws_url;
 
 #[cfg(not(feature = "websocket"))]
 mod stub {

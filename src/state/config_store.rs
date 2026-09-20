@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 #[cfg(not(target_family = "wasm"))]
-use std::io::Write;
+use std::io::{Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -419,58 +419,88 @@ fn commit_flush(
 
 #[cfg(not(target_family = "wasm"))]
 fn load_config(path: &Path) -> (AppConfig, Option<String>) {
-    // Cap untrusted input before reading: serde on an oversized file would
+    // Cap untrusted input before parsing: serde on an oversized file would
     // allocate unbounded memory at startup.
-    if let Ok(meta) = std::fs::metadata(path)
-        && meta.len() > MAX_STATE_FILE_BYTES
-    {
-        quarantine_bad_config(path);
-        return (
-            AppConfig::default(),
-            Some(
-                AppError::StateParse {
-                    path: path.to_path_buf(),
-                    details: format!("file exceeds the {MAX_STATE_FILE_BYTES}-byte cap"),
-                }
-                .to_string(),
-            ),
-        );
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (AppConfig::default(), None);
+        }
+        Err(err) => return state_read_error(path, err),
+    };
+
+    match file.metadata() {
+        Ok(meta) if meta.len() > MAX_STATE_FILE_BYTES => {
+            quarantine_bad_config(path);
+            return oversized_state_error(path);
+        }
+        Ok(_) => {}
+        Err(err) => return state_read_error(path, err),
     }
 
-    match std::fs::read_to_string(path) {
-        Ok(json) => match serde_json::from_str::<AppConfig>(&json) {
-            Ok(config) => {
-                let config = crate::config_migrations::migrate(config).normalized();
-                // Log-only tier: lints surface unusable-but-loadable values.
-                crate::state::config_validation::validate_config(&config);
-                (config, None)
-            }
-            Err(err) => {
-                quarantine_bad_config(path);
-                (
-                    AppConfig::default(),
-                    Some(
-                        AppError::StateParse {
-                            path: path.to_path_buf(),
-                            details: err.to_string(),
-                        }
-                        .to_string(),
-                    ),
-                )
-            }
-        },
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (AppConfig::default(), None),
-        Err(err) => (
-            AppConfig::default(),
-            Some(
-                AppError::StateRead {
-                    path: path.to_path_buf(),
-                    details: err.to_string(),
-                }
-                .to_string(),
-            ),
-        ),
+    let mut json = String::new();
+    if let Err(err) = file
+        .take(MAX_STATE_FILE_BYTES + 1)
+        .read_to_string(&mut json)
+    {
+        return state_read_error(path, err);
     }
+    // The bounded read is the real cap; this catches a file that grew past
+    // it between the metadata check and the read.
+    if json.len() as u64 > MAX_STATE_FILE_BYTES {
+        quarantine_bad_config(path);
+        return oversized_state_error(path);
+    }
+
+    match serde_json::from_str::<AppConfig>(&json) {
+        Ok(config) => {
+            let config = crate::config_migrations::migrate(config).normalized();
+            // Log-only tier: lints surface unusable-but-loadable values.
+            crate::state::config_validation::validate_config(&config);
+            (config, None)
+        }
+        Err(err) => {
+            quarantine_bad_config(path);
+            (
+                AppConfig::default(),
+                Some(
+                    AppError::StateParse {
+                        path: path.to_path_buf(),
+                        details: err.to_string(),
+                    }
+                    .to_string(),
+                ),
+            )
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn state_read_error(path: &Path, err: std::io::Error) -> (AppConfig, Option<String>) {
+    (
+        AppConfig::default(),
+        Some(
+            AppError::StateRead {
+                path: path.to_path_buf(),
+                details: err.to_string(),
+            }
+            .to_string(),
+        ),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn oversized_state_error(path: &Path) -> (AppConfig, Option<String>) {
+    (
+        AppConfig::default(),
+        Some(
+            AppError::StateParse {
+                path: path.to_path_buf(),
+                details: format!("file exceeds the {MAX_STATE_FILE_BYTES}-byte cap"),
+            }
+            .to_string(),
+        ),
+    )
 }
 
 /// Write pre-serialized bytes atomically.
@@ -485,13 +515,19 @@ fn save_config(path: &Path, json_bytes: &[u8]) -> Result<(), AppError> {
     #[cfg(not(target_family = "wasm"))]
     {
         ensure_parent_dir(path)?;
-        let mut file =
-            AtomicWriteFile::options()
-                .open(path)
-                .map_err(|err| AppError::StateWrite {
-                    path: path.to_path_buf(),
-                    details: err.to_string(),
-                })?;
+        let mut options = AtomicWriteFile::options();
+        // The rename commit replaces a planted symlink instead of writing
+        // through it; every commit lands 0600 (preserve_mode off).
+        #[cfg(target_family = "unix")]
+        {
+            use atomic_write_file::unix::OpenOptionsExt as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).preserve_mode(false);
+        }
+        let mut file = options.open(path).map_err(|err| AppError::StateWrite {
+            path: path.to_path_buf(),
+            details: err.to_string(),
+        })?;
         file.write_all(json_bytes)
             .map_err(|err| AppError::StateWrite {
                 path: path.to_path_buf(),

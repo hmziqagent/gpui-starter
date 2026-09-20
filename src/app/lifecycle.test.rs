@@ -46,6 +46,12 @@ fn crash_marker_roundtrip_in_data_dir() {
     let _ = std::fs::remove_file(&marker);
 
     write_crash_marker();
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&marker).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "marker must stay user-only");
+    }
     let contents = check_previous_crash();
     assert!(contents.is_some(), "marker should exist after write");
     assert!(

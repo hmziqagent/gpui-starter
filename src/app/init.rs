@@ -140,25 +140,26 @@ pub fn init(cx: &mut App) {
         gpui_component::Theme::global_mut(cx).apply_config(&theme);
     }
 
-    // Hot reload of themes/ is dev-checkout-only: the 0.6.1 watcher
-    // create_dir_all()s missing dirs, so never watch a nonexistent path.
+    // Hot reload of themes/ is dev-checkout-only: the watcher create_dir_all()s
+    // missing dirs, so never point it at a path that should not exist.
     #[cfg(not(target_family = "wasm"))]
     {
         let themes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes");
         if themes_dir.exists() {
-            if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
+            // watch_dir never returns Err (it logs internally); on_load
+            // re-registers embedded themes after the initial reload.
+            let _ = gpui_component::ThemeRegistry::watch_dir(
                 themes_dir,
                 cx,
-                // The initial reload clears the registry; re-register the
-                // embedded set so it survives alongside the dir's themes.
                 crate::app::theme::register_embedded_themes,
-            ) {
-                tracing::warn!(
-                    target: "gpui_starter::startup",
-                    error = %err,
-                    "theme hot-reload unavailable"
-                );
-            }
+            );
+
+            // Watcher reloads clear the registry without re-running on_load,
+            // so a deleted dev theme file must not strand the embedded set.
+            cx.observe_global::<gpui_component::ThemeRegistry>(|cx| {
+                crate::app::theme::ensure_embedded_themes(cx);
+            })
+            .detach();
         }
     }
 
