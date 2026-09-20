@@ -5,6 +5,8 @@ use gpui_component::{ActiveTheme as _, Disableable as _, button::Button, h_flex}
 
 use gpui_query::core::QueryStatus;
 
+use crate::accessibility::A11yExt as _;
+
 use super::super::ui_helpers::{chip, section_card, status_badge};
 use super::super::{HttpFetchKind, QueryPlaygroundPage};
 
@@ -131,6 +133,7 @@ impl QueryPlaygroundPage {
                 el.child(
                     div()
                         .id("pg-http-body")
+                        .a11y(Role::Code, "Response body")
                         .mx_4()
                         .mb_4()
                         .p_3()
@@ -146,6 +149,9 @@ impl QueryPlaygroundPage {
         .when_some(error.as_ref(), |el, err| {
             el.child(
                 div()
+                    .id("pg-http-error")
+                    .a11y(Role::Paragraph, format!("error: {err}"))
+                    .a11y_live(accesskit::Live::Polite)
                     .mx_4()
                     .mb_4()
                     .p_3()

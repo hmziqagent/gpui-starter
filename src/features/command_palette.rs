@@ -1,6 +1,8 @@
 //! Command palette ("launcher"): a floating search window over the command
 //! registry, backed by [`crate::features::palette`].
 
+use std::rc::Rc;
+
 use gpui::{prelude::*, *};
 use gpui_component::{
     ActiveTheme as _, FocusTrapElement as _, Icon, IconName, Root, Sizable as _, h_flex,
@@ -9,6 +11,7 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::accessibility::A11yExt as _;
 use crate::commands::{self, CommandId};
 use crate::features::palette::{BaseDelegate, FuzzyMatchConfig, ItemFilter, PaletteEntry};
 
@@ -172,6 +175,8 @@ impl Render for Launcher {
             .collect();
 
         v_flex()
+            .id("launcher-surface")
+            .a11y(Role::Dialog, "Command palette")
             .size_full()
             .bg(theme.background.opacity(0.0))
             .border_1()
@@ -209,11 +214,15 @@ impl Render for Launcher {
                             .appearance(false)
                             .bordered(false)
                             .focus_bordered(false)
+                            .aria_label("Search commands")
                             .flex_1(),
                     ),
             )
             .child(
                 v_flex()
+                    .id("launcher-results")
+                    .a11y(Role::ListBox, "Results")
+                    .aria_orientation(Orientation::Vertical)
                     .flex_1()
                     .overflow_y_scrollbar()
                     .py_1()
@@ -222,9 +231,20 @@ impl Render for Launcher {
                         let icon = row.1.clone();
                         let title = row.2.clone();
                         let subtitle = row.3.clone();
+                        let on_activate: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> =
+                            Rc::new(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.set_selected_display(display_ix);
+                                this.act(cx);
+                            }));
+                        let on_a11y_activate = on_activate.clone();
 
                         h_flex()
                             .id(display_ix)
+                            .a11y(Role::ListBoxOption, title.clone())
+                            .aria_description(subtitle.clone())
+                            .aria_selected(is_selected)
+                            .aria_position_in_set(display_ix + 1)
+                            .aria_size_of_set(rows.len())
                             .px_3()
                             .py_2()
                             .mx_1()
@@ -240,10 +260,12 @@ impl Render for Launcher {
                                     cx.notify();
                                 }
                             }))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_selected_display(display_ix);
-                                this.act(cx);
-                            }))
+                            .on_click(move |event, window, cx| {
+                                on_activate(event, window, cx);
+                            })
+                            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                                on_a11y_activate(&ClickEvent::default(), window, cx);
+                            })
                             .child(
                                 div()
                                     .flex_shrink_0()
@@ -278,6 +300,8 @@ impl Render for Launcher {
                     .when(!has_results, |el| {
                         el.child(
                             div()
+                                .id("launcher-no-results")
+                                .a11y(Role::Paragraph, "No results")
                                 .px_4()
                                 .py_8()
                                 .w_full()
@@ -292,6 +316,11 @@ impl Render for Launcher {
             )
             .child(
                 h_flex()
+                    .id("launcher-hints")
+                    .a11y(
+                        Role::Paragraph,
+                        "Keyboard: up and down navigate, Enter opens, Escape closes",
+                    )
                     .px_4()
                     .py(px(8.))
                     .gap_4()

@@ -1,6 +1,18 @@
 use gpui::{prelude::*, *};
 use gpui_component::{button::Button, label::Label, switch::Switch};
 
+use crate::accessibility::A11yExt as _;
+
+/// Card section title: a level-2 heading node, since `Label` text alone
+/// produces no accessibility node.
+fn section_heading(id: &'static str, title: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .a11y(Role::Heading, title)
+        .aria_level(2)
+        .child(Label::new(title))
+}
+
 /// Renders the "Shortcuts" settings card.
 pub fn render_shortcuts_section(
     app_config: &crate::app_state::AppConfig,
@@ -8,7 +20,7 @@ pub fn render_shortcuts_section(
 ) -> impl IntoElement {
     let app_config = app_config.clone();
     super::settings_card_base(cx)
-        .child(Label::new("Shortcuts"))
+        .child(section_heading("settings-shortcuts-title", "Shortcuts"))
         .child(
             div()
                 .flex()
@@ -17,6 +29,7 @@ pub fn render_shortcuts_section(
                 .child(Label::new("Enable global launcher shortcut (macOS)"))
                 .child(
                     Switch::new("global-shortcut-enabled")
+                        .accessibility_label("Enable global launcher shortcut (macOS)")
                         .checked(app_config.global_shortcut_enabled)
                         .on_click(|checked, _, cx| {
                             crate::app_state::update_config(cx, |config| {
@@ -31,7 +44,7 @@ pub fn render_shortcuts_section(
 /// Renders the "Storage" settings card.
 pub fn render_storage_section(cx: &mut Context<super::super::SettingsPage>) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(Label::new("Storage"))
+        .child(section_heading("settings-storage-title", "Storage"))
         .child(
             div()
                 .flex()
@@ -63,7 +76,7 @@ pub fn render_developer_section(
 ) -> impl IntoElement {
     let app_config = app_config.clone();
     super::settings_card_base(cx)
-        .child(Label::new("Developer"))
+        .child(section_heading("settings-developer-title", "Developer"))
         .child(
             div()
                 .flex()
@@ -72,6 +85,7 @@ pub fn render_developer_section(
                 .child(Label::new("Show Frame Time"))
                 .child(
                     Switch::new("show-frame-time")
+                        .accessibility_label("Show Frame Time")
                         .checked(app_config.show_frame_time)
                         .on_click(|checked, _, cx| {
                             crate::app_state::update_config(cx, |config| {

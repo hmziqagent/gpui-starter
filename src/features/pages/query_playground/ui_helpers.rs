@@ -5,6 +5,8 @@ use gpui_component::{ActiveTheme as _, v_flex};
 
 use gpui_query::core::QueryStatus;
 
+use crate::accessibility::A11yExt as _;
+
 use super::PlaygroundUser;
 
 pub fn section_card(title: &str, description: &str, cx: &App) -> Div {
@@ -25,12 +27,21 @@ pub fn section_card(title: &str, description: &str, cx: &App) -> Div {
                         .gap_1()
                         .child(
                             div()
+                                .id(ElementId::Name(SharedString::from(format!(
+                                    "pg-section-title-{title}"
+                                ))))
+                                .a11y(Role::Heading, title.to_string())
+                                .aria_level(2)
                                 .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(title.to_string()),
                         )
                         .child(
                             div()
+                                .id(ElementId::Name(SharedString::from(format!(
+                                    "pg-section-desc-{title}"
+                                ))))
+                                .a11y(Role::Paragraph, description.to_string())
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(description.to_string()),
@@ -50,13 +61,18 @@ pub fn mini_card(label: &str, cx: &App) -> Div {
         .flex_1()
         .child(
             div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "pg-mini-title-{label}"
+                ))))
+                .a11y(Role::Heading, label.to_string())
+                .aria_level(3)
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label.to_string()),
         )
 }
 
-pub fn status_badge(status: QueryStatus, cx: &App) -> Div {
+pub fn status_badge(status: QueryStatus, cx: &App) -> Stateful<Div> {
     let color = match status {
         QueryStatus::Idle => cx.theme().muted_foreground,
         QueryStatus::LoadingEmpty | QueryStatus::LoadingWithData => cx.theme().info,
@@ -64,7 +80,13 @@ pub fn status_badge(status: QueryStatus, cx: &App) -> Div {
         QueryStatus::Failure => cx.theme().danger,
         QueryStatus::Cancelled => cx.theme().warning,
     };
+    let label = format!("Status: {}", status.label());
     div()
+        .id(ElementId::Name(SharedString::from(format!(
+            "pg-status-{}",
+            status.label()
+        ))))
+        .a11y(Role::Paragraph, label)
         .px_3()
         .py_1()
         .rounded(cx.theme().radius_lg)
@@ -75,8 +97,12 @@ pub fn status_badge(status: QueryStatus, cx: &App) -> Div {
         .child(status.label().to_string())
 }
 
-pub fn chip(label: &str, background: Hsla, cx: &App) -> Div {
+pub fn chip(label: &str, background: Hsla, cx: &App) -> Stateful<Div> {
     div()
+        .id(ElementId::Name(SharedString::from(format!(
+            "pg-chip-{label}"
+        ))))
+        .a11y(Role::Paragraph, label.to_string())
         .px_3()
         .py_1()
         .rounded(cx.theme().radius_lg)
@@ -88,21 +114,37 @@ pub fn chip(label: &str, background: Hsla, cx: &App) -> Div {
 }
 
 /// Render each entry on its own line (joined `\n` does not line-break in GPUI).
-pub fn source_preview(data: &Option<Vec<PlaygroundUser>>) -> Div {
-    match data {
-        Some(users) => {
-            let el = v_flex().gap_0p5();
-            users.iter().fold(el, |el, u| {
+pub fn source_preview(data: &Option<Vec<PlaygroundUser>>) -> Stateful<Div> {
+    let label = match data {
+        Some(users) => users
+            .iter()
+            .map(|u| format!("{} ({}): {}", u.id, u.name, u.email))
+            .collect::<Vec<_>>()
+            .join("; "),
+        None => "No data".to_string(),
+    };
+    let lines = match data {
+        Some(users) => users
+            .iter()
+            .fold(v_flex().gap_0p5(), |el, u| {
                 el.child(div().child(format!("{} ({}): {}", u.id, u.name, u.email)))
             })
-        }
-        None => v_flex().child(div().child("No data")),
-    }
+            .into_any_element(),
+        None => v_flex().child(div().child("No data")).into_any_element(),
+    };
+    v_flex()
+        .id("pg-source-preview")
+        .a11y(Role::Paragraph, format!("Source data: {label}"))
+        .child(lines)
 }
 
-pub fn mapped_preview(data: &Option<Vec<String>>) -> Div {
-    match data {
-        Some(names) => v_flex().child(div().child(format!("[{}]", names.join(", ")))),
-        None => v_flex().child(div().child("No data")),
-    }
+pub fn mapped_preview(data: &Option<Vec<String>>) -> Stateful<Div> {
+    let label = match data {
+        Some(names) => format!("[{}]", names.join(", ")),
+        None => "No data".to_string(),
+    };
+    v_flex()
+        .id("pg-mapped-preview")
+        .a11y(Role::Paragraph, format!("Mapped data: {label}"))
+        .child(div().child(label))
 }

@@ -13,6 +13,8 @@ use gpui_component::{
 
 use gpui_query::core::{MutationStatus, QueryStatus};
 
+use crate::accessibility::A11yExt as _;
+
 use super::super::ui_helpers::{chip, mapped_preview, section_card, source_preview, status_badge};
 use super::super::{PlaygroundPage, QueryPlaygroundPage};
 
@@ -54,7 +56,7 @@ impl QueryPlaygroundPage {
             h_flex().gap_2().items_center().px_4().py_2()
                 .child(
                     div().min_w(px(200.))
-                        .child(Input::new(&self.mutation_input_state))
+                        .child(Input::new(&self.mutation_input_state).aria_label("Mutation variables"))
                 )
                 .child(
                     Button::new("pg-mutate")
@@ -81,8 +83,11 @@ impl QueryPlaygroundPage {
             v_flex().gap_1().px_4().pb_3()
                 .child(
                     h_flex().gap_3().items_center()
-                        .child(
+                        .child({
+                            let label = format!("Status: {}", m_status.label());
                             div()
+                                .id("pg-mutation-status")
+                                .a11y(Role::Paragraph, label)
                                 .px_3()
                                 .py_1()
                                 .rounded(cx.theme().radius_lg)
@@ -90,8 +95,8 @@ impl QueryPlaygroundPage {
                                 .border_color(status_color)
                                 .text_sm()
                                 .text_color(status_color)
-                                .child(m_status.label().to_string()),
-                        )
+                                .child(m_status.label().to_string())
+                        })
                         .when_some(m_data, |el, d| {
                             el.child(chip(&format!("data: {}", d), cx.theme().background, cx))
                         })
@@ -101,6 +106,9 @@ impl QueryPlaygroundPage {
                         .when_some(m_error, |el, e| {
                             el.child(
                                 div()
+                                    .id("pg-mutation-error")
+                                    .a11y(Role::Paragraph, format!("error: {e}"))
+                                    .a11y_live(accesskit::Live::Polite)
                                     .px_3()
                                     .py_1()
                                     .rounded(cx.theme().radius_lg)

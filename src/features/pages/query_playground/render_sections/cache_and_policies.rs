@@ -9,6 +9,8 @@ use gpui_component::{
 
 use gpui_query::core::{QueryResource, QueryStatus, RetryPolicy};
 
+use crate::accessibility::A11yExt as _;
+
 use super::super::QueryPlaygroundPage;
 use super::super::ui_helpers::{chip, mini_card, section_card, status_badge};
 
@@ -205,6 +207,12 @@ impl QueryPlaygroundPage {
                 .when_some(error, |el, _| {
                     el.child(
                         div()
+                            .id("pg-retry-error")
+                            .a11y(
+                                Role::Paragraph,
+                                format!("Gave up after {} retries.", policy.max_retries),
+                            )
+                            .a11y_live(accesskit::Live::Polite)
                             .text_xs()
                             .text_color(cx.theme().danger)
                             .child(format!("Gave up after {} retries.", policy.max_retries)),

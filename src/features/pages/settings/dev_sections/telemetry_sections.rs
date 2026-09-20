@@ -1,14 +1,30 @@
 use gpui::{prelude::*, *};
 use gpui_component::{ActiveTheme as _, button::Button, label::Label};
 
+use crate::accessibility::A11yExt as _;
 use crate::telemetry::{self, TelemetryMode};
+
+/// Card section title: a level-2 heading node, since `Label` text alone
+/// produces no accessibility node.
+fn section_heading(id: &'static str, title: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .a11y(Role::Heading, title)
+        .aria_level(2)
+        .child(Label::new(title))
+}
 
 /// Renders the "Telemetry" mode selection card.
 pub fn render_telemetry_section(cx: &mut Context<super::super::SettingsPage>) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(Label::new("Telemetry"))
+        .child(section_heading("settings-telemetry-title", "Telemetry"))
         .child(
             div()
+                .id("settings-telemetry-desc")
+                .a11y(
+                    Role::Paragraph,
+                    "Telemetry export is disabled by default until explicit consent.",
+                )
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child("Telemetry export is disabled by default until explicit consent."),
@@ -55,7 +71,10 @@ pub fn render_telemetry_runtime_section(
     cx: &mut Context<super::super::SettingsPage>,
 ) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(Label::new("Telemetry Runtime"))
+        .child(section_heading(
+            "settings-telemetry-runtime-title",
+            "Telemetry Runtime",
+        ))
         .child(
             div()
                 .flex()
