@@ -196,11 +196,8 @@ async fn platform_permission_state() -> NotificationPermissionState {
 
     let (tx, rx) = tokio::sync::oneshot::channel::<NotificationPermissionState>();
 
-    // SAFETY: The `RcBlock` is heap-allocated and passed to macOS's notification center,
-    // which invokes the completion handler exactly once on the main thread.
-    // The `NonNull<UNNotificationSettings>` pointer is guaranteed valid by Apple's
-    // API contract for the notification settings callback. `tx.take()` ensures
-    // the oneshot channel is consumed only once, preventing double-sends.
+    // SAFETY: Apple invokes the completion handler exactly once on the main
+    // thread with a valid pointer; `tx.take()` prevents double-send.
     unsafe {
         let tx = RefCell::new(Some(tx));
         let block = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {

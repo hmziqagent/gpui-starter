@@ -1,36 +1,31 @@
 # gpui-starter
 
-A full-featured desktop application boilerplate built with [GPUI](https://github.com/zed-industries/zed) from Zed, for macOS.
-
-<!-- Add screenshot here -->
+A desktop application boilerplate built on [GPUI](https://github.com/zed-industries/zed), the UI framework from Zed.
 
 ## Prerequisites
 
-- **Rust nightly** (edition 2024)
-- **macOS** (primary target; Linux X11/Wayland experimental)
+- Rust nightly (edition 2024)
+- macOS is the primary target. Linux on X11/Wayland works but is less tested.
 
 ## Quick Start
-
-Build and run directly:
 
 ```sh
 cargo build
 cargo run
 ```
 
-Or use the macOS development script, which builds the binary, bundles it into an `.app`, and codesigns it:
+On macOS you can also build a signed `.app` bundle for local use:
 
 ```sh
 bash scripts/macos-dev-app.sh
-# Outputs the path to GPUI Starter.app
 open "$(bash scripts/macos-dev-app.sh)"
 ```
 
 ### Linux Development
 
-On Debian/Ubuntu, install the build dependencies before building. (GPUI does
-**not** use WebKit or libzstd — those are leftover from a Tauri template. The
-real GPUI stack is Wayland/X11 + Vulkan + FreeType/fontconfig.)
+Debian/Ubuntu needs build dependencies installed first. GPUI does not use
+WebKit or libzstd (those come up in Tauri instructions); it builds against
+Wayland/X11, Vulkan, and FreeType/fontconfig.
 
 ```sh
 sudo apt update
@@ -45,83 +40,72 @@ sudo apt install -y \
   libvulkan-dev libvulkan1
 ```
 
-> `libvulkan-dev` is the **build** header; the actual Vulkan loader
-> (`libvulkan1`) is a **runtime** requirement — a release binary built here will
-> fail to start on a machine without a Vulkan loader installed. The bundled
-> `flake.nix` and `scripts/install-linux-deps.sh` cover both.
+`libvulkan-dev` supplies the build headers. `libvulkan1` is the runtime
+loader: a release binary will not start on a machine without it.
+`scripts/install-linux-deps.sh` installs both.
 
 #### Nix
 
-A `flake.nix` is provided for reproducible Linux builds. Enter a fully set-up
-dev shell (Vulkan/Wayland/XCB on `LD_LIBRARY_PATH`) with:
+`flake.nix` provides reproducible Linux builds. The lockfile is not shipped,
+so run `nix flake lock` once to pin nixpkgs.
 
 ```sh
-nix develop      # then `cargo run`
-nix build .#default   # produces a release binary in result/bin/gpui-starter
+nix develop            # dev shell with Vulkan/Wayland/XCB on LD_LIBRARY_PATH
+nix build .#default    # release binary in result/bin/gpui-starter
 ```
-
-`nix flake lock` must be run once to pin nixpkgs (the lockfile is not shipped).
 
 ## Features
 
 ### Core
 
-- **Lifecycle** -- startup / shutdown / crash state machine with first-run detection
-- **Single instance** -- IPC guard prevents duplicate processes and forwards deep links
-- **Window management** -- custom title bar with drag regions and native traffic-light buttons
+- Lifecycle state machine covering startup, shutdown, crash handling, and first-run detection
+- Single-instance guard over IPC that forwards deep links to the running process
+- Custom title bar with drag regions and native traffic-light buttons
 
 ### UI
 
-- **Sidebar** -- collapsible navigation with page routing
-- **Title bar** -- replaces native window chrome, supports macOS traffic lights
-- **Status bar** -- contextual status display at the bottom of the window
-- **Command launcher** -- Cmd+K palette with fuzzy search across all app actions
-- **Undo / redo** -- command-pattern stack with Cmd+Z / Cmd+Y support
+- Collapsible sidebar with page routing
+- Status bar
+- Cmd+K command palette with fuzzy search over app actions
+- Undo/redo stack bound to Cmd+Z / Cmd+Y
 
 ### Data
 
-- **SQLite** -- local data persistence via `rusqlite`
-- **Configuration** -- JSON config with migration system for schema changes
-- **Secure storage** -- OS keyring integration (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+- SQLite persistence via `rusqlite`
+- JSON config with schema migrations
+- Secure storage through the OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 
 ### System
 
-- **Tray** -- macOS system tray with app icon and quick-access menu
-- **Notifications** -- native OS backends with in-app toast fallback and persistent inbox
-- **Keyboard shortcuts** -- global hotkey (Alt+Space) and app-level keybindings
-- **Deep links** -- URL scheme handling with single-instance forwarding
+- macOS tray icon and quick-access menu
+- Native notifications with an in-app toast fallback and a persistent inbox
+- Global hotkey (Alt+Space) plus app-level keybindings
+- Deep link handling with single-instance forwarding
 
 ### Internationalization
 
-- **Fluent-based** -- built on `es-fluent` for type-safe translations
-- **Locales** -- English (`en`) and Chinese Simplified (`zh-CN`) included
+- Fluent translations via `es-fluent`
+- English (`en`) and Chinese Simplified (`zh-CN`) locales
 
 ### Developer Experience
 
-- **Logging** -- file-based logging via `tracing-appender`
-- **Telemetry** -- disabled / local / remote modes with consent gate
-- **Diagnostics** -- live app state, subsystem status, and debug actions page
-- **Tests** -- integration test harness under `#[cfg(test)]`
-- **Accessibility** -- AccessKit integration for screen reader support
+- File-based logging via `tracing-appender`
+- Telemetry with off / local / remote modes behind a consent gate
+- Diagnostics page showing live app state and subsystem status
+- Integration test harness under `#[cfg(test)]`
+- AccessKit integration for screen readers
 
 ## Architecture
 
-See [docs/gpui-architecture.md](docs/gpui-architecture.md) for an overview of the module layout and data flow.
+See [docs/gpui-architecture.md](docs/gpui-architecture.md) for the module layout and data flow.
 
 ## Marketing Site
 
-The marketing/docs site lives entirely in [`web/`](web/) (Astro on Bun), fully separate from the desktop app. Boilerplate users who don't want it can delete the `web/` folder and the `.github/workflows/deploy-docs.yml` workflow without touching the app.
+The Astro site in [`web/`](web/) runs on Bun and is separate from the desktop app. Boilerplate users who do not want it can delete `web/` and `.github/workflows/deploy-docs.yml` without touching the app.
 
 ## Themes
 
-23 built-in themes with live hot-reloading -- drop a JSON file into `themes/` and it appears instantly. Highlights include:
-
-- Gruvbox, Tokyonight, Catppuccin, Everforest
-- Solarized, Ayu, Molokai, Jellybeans
-- Matrix, Fahrenheit, Hybrid
-- macOS Classic, High Contrast (Dark / Light)
-
-Custom themes use the same JSON format. See the `themes/` directory for examples.
+24 built-in themes with hot reloading: drop a JSON file into `themes/` and it is picked up without a restart. The set includes Gruvbox, Tokyonight, Catppuccin, Everforest, Solarized, Ayu, Molokai, Jellybeans, Matrix, Fahrenheit, Hybrid, macOS Classic, and High Contrast (dark and light). Custom themes use the same JSON format; see `themes/` for examples.
 
 ## License
 
@@ -129,4 +113,4 @@ Custom themes use the same JSON format. See the `themes/` directory for examples
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, code style, commit format, and the PR process.

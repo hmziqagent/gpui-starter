@@ -58,21 +58,15 @@ impl NotificationBackend for NotifyRustBackend {
             .summary(&request.title)
             .body(&request.body);
 
-        // Hint::DesktopEntry is Linux/D-Bus-only (notify-rust's macOS backend
-        // doesn't have it). It tells the daemon which desktop-entry we are so it
-        // can resolve our .desktop + icon (.appname alone is freeform, never
-        // looked up).
+        // Tells the daemon which .desktop entry we are so it can resolve icon
+        // and app name (`.appname` alone is freeform, never looked up).
         #[cfg(target_os = "linux")]
         notification.hint(notify_rust::Hint::DesktopEntry(
             DESKTOP_ENTRY_ID.to_string(),
         ));
 
-        // Urgency: GNOME defaults an omitted urgency to Normal, which
-        // Do-Not-Disturb / per-app banner mute / busy / fullscreen suppress. Only
-        // Critical pierces all those gates (GNOME Shell js/ui/messageTray.js), so
-        // background-worthy events (including the test affordance) map to Critical;
-        // routine foreground events stay Normal. Linux/D-Bus only — notify-rust's
-        // macOS backend has no urgency concept.
+        // GNOME suppresses Normal urgency under DND/mute/busy/fullscreen; only
+        // Critical pierces those gates (GNOME Shell js/ui/messageTray.js).
         #[cfg(target_os = "linux")]
         notification.urgency(match request.importance {
             crate::notifications::NotificationImportance::BackgroundWorthy => {
@@ -89,9 +83,8 @@ impl NotificationBackend for NotifyRustBackend {
 
         #[cfg(target_os = "linux")]
         {
-            // show_async() is a real async future driven by zbus's own executor
-            // — no blocking, safe to await here. The sync show() would block_on
-            // (async-io) and park the executor that polls this async trait.
+            // show_async() is driven by zbus's own executor; the sync show()
+            // would block_on (async-io) and park the executor polling this trait.
             match notification.show_async().await {
                 Ok(_) => {
                     tracing::info!(target: LOG, "notify-rust send succeeded");

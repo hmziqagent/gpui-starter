@@ -10,8 +10,7 @@ pub use service::{
 };
 
 pub(crate) use service::{NotificationBackendKind, NotificationCapabilities};
-// NotificationImportance is only consumed via `crate::notifications::` inside
-// Linux-gated notify-rust code (urgency mapping) — re-exporting it
-// unconditionally leaves the import unused on macOS/Windows.
+// NotificationImportance is only consumed inside Linux-gated notify-rust code;
+// re-exporting it unconditionally leaves it unused on macOS/Windows.
 #[cfg(target_os = "linux")]
 pub(crate) use service::NotificationImportance;

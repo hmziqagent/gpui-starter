@@ -105,8 +105,8 @@ jobs:
 
   # ---------------------------------------------------------------------
   # Linux lane: compiles the cfg(target_os = "linux")-gated code paths
-  # (compositor, layer_shell, detached/session_env) that the macOS-primary
-  # lane never sees. Same scoped-`test` policy, same codegen discipline.
+  # (notifications backends, window setup) that the macOS-primary lane
+  # never sees. Same scoped-`test` policy, same codegen discipline.
   # Runners pinned to ubuntu-24.04: ubuntu-latest flips to Ubuntu 26 on
   # 2026-10-19 (actions/runner-images#14748), which would change system
   # deps under us mid-quarter.

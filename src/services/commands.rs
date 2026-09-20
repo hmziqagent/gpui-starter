@@ -71,18 +71,20 @@ pub fn availability(id: CommandId, cx: &App) -> CommandAvailability {
             disabled_reason: (!desktop.opener_available)
                 .then_some("System opener backend unavailable".into()),
         },
-        CommandId::Undo => CommandAvailability {
-            enabled: crate::undo_stack::can_undo(cx).is_some(),
-            disabled_reason: crate::undo_stack::can_undo(cx)
-                .is_none()
-                .then_some("No undo available".into()),
-        },
-        CommandId::Redo => CommandAvailability {
-            enabled: crate::undo_stack::can_redo(cx).is_some(),
-            disabled_reason: crate::undo_stack::can_redo(cx)
-                .is_none()
-                .then_some("No redo available".into()),
-        },
+        CommandId::Undo => {
+            let undo = crate::undo_stack::can_undo(cx);
+            CommandAvailability {
+                enabled: undo.is_some(),
+                disabled_reason: undo.is_none().then_some("No undo available".into()),
+            }
+        }
+        CommandId::Redo => {
+            let redo = crate::undo_stack::can_redo(cx);
+            CommandAvailability {
+                enabled: redo.is_some(),
+                disabled_reason: redo.is_none().then_some("No redo available".into()),
+            }
+        }
         CommandId::Restart => CommandAvailability {
             enabled: cfg!(unix),
             disabled_reason: (!cfg!(unix)).then_some("Restart requires exec-reload (unix)".into()),

@@ -7,10 +7,6 @@ use gpui_query::core::QueryStatus;
 
 use super::PlaygroundUser;
 
-// ---------------------------------------------------------------------------
-// UI helpers
-// ---------------------------------------------------------------------------
-
 pub fn section_card(title: &str, description: &str, cx: &App) -> Div {
     div()
         .rounded(cx.theme().radius_lg)
@@ -91,8 +87,7 @@ pub fn chip(label: &str, background: Hsla, cx: &App) -> Div {
         .child(label.to_string())
 }
 
-/// Finding 12: Render source preview with each entry on its own line instead
-/// of joining with `\n` which may not render as visual line breaks in GPUI.
+/// Render each entry on its own line (joined `\n` does not line-break in GPUI).
 pub fn source_preview(data: &Option<Vec<PlaygroundUser>>) -> Div {
     match data {
         Some(users) => {
@@ -105,8 +100,6 @@ pub fn source_preview(data: &Option<Vec<PlaygroundUser>>) -> Div {
     }
 }
 
-/// Finding 12: Render mapped preview as a single line (already was fine, but
-/// now returns a Div for consistency with source_preview).
 pub fn mapped_preview(data: &Option<Vec<String>>) -> Div {
     match data {
         Some(names) => v_flex().child(div().child(format!("[{}]", names.join(", ")))),

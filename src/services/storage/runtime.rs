@@ -8,7 +8,7 @@ use super::{StorageBackend, StorageSnapshot};
 use super::StorageError;
 
 #[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// GPUI Global holding the shared storage backend.
 ///
@@ -60,17 +60,9 @@ pub fn initialize(cx: &mut App) {
     }
 
     if snapshot.available {
-        // The async-trait refactor moved health_check off the synchronous
-        // boot path: run it as a spawned task and patch the snapshot when it
-        // lands (the native body resolves on its first poll, so this only
-        // defers the bookkeeping, not the I/O semantics).
-        //
-        // The task must ALSO re-derive the capability status from the
-        // patched snapshot: the synchronous `set_capabilities` call below
-        // runs while `healthy` is still its default `false`, so without the
-        // re-set every healthy native boot would permanently register
-        // `degraded: true` (the registry has no observers). Mirrors the wasm
-        // boot task below.
+        // The health check runs as a spawned task and must re-derive the
+        // capability from the patched snapshot: this synchronous call sees
+        // `healthy: false`, and the registry has no observers to refresh it.
         let backend_for_health = Arc::clone(&backend);
         let bg = cx.background_executor().clone();
         cx.spawn(async move |cx| {
@@ -94,14 +86,11 @@ pub fn initialize(cx: &mut App) {
     cx.set_global(StorageRuntime { backend });
 }
 
-/// Wasm: boot the OPFS sqlite worker backend (`wasm/sqlite/worker.js`,
-/// vendored `@sqlite.org/sqlite-wasm` engine).
-///
+/// Wasm: boot the OPFS sqlite worker backend (`wasm/sqlite/worker.js`).
 /// Worker spawn + engine init are asynchronous, so the snapshot starts in a
-/// provisional "worker starting" state and the spawned boot task upgrades it
-/// (or records the failure). When the Worker API or OPFS is missing the app
-/// keeps booting on the unavailable-snapshot behavior — storage is never
-/// load-bearing for boot.
+/// provisional "worker starting" state and the spawned boot task upgrades it.
+/// Without the Worker API or OPFS the app keeps booting on the
+/// unavailable-snapshot behavior — storage is never load-bearing for boot.
 #[cfg(target_family = "wasm")]
 pub fn initialize(cx: &mut App) {
     let boot = super::web::boot_storage_worker();
@@ -184,25 +173,16 @@ pub fn initialize(cx: &mut App) {
     }
 }
 
-/// Re-derive the capability-registry status from a snapshot.
-///
-/// `initialize` is synchronous on both targets, but the backends settle
-/// asynchronously: the health check (native) and the worker round-trip
-/// (wasm) land in spawned tasks. The registry has no observers to re-derive
-/// the status, so EVERY path that updates [`StorageSnapshot`] must call this
-/// again — the provisional boot snapshot always has `healthy: false`, and a
-/// one-shot set there would freeze `degraded: true` on every healthy boot.
+/// Re-derive the capability-registry status from a snapshot. Backends settle
+/// asynchronously after the synchronous boot, and the registry has no
+/// observers — every snapshot update must call this again or a healthy boot
+/// freezes in as `degraded: true`.
 fn set_capabilities(supported: bool, snapshot: &StorageSnapshot, cx: &mut App) {
     crate::capabilities::set("storage", capability_status(supported, snapshot), cx);
 }
 
-/// Pure snapshot → capability-status derivation shared by every
-/// `set_capabilities` call site on both targets.
-///
-/// Unit-tested natively in `storage.test.rs` together with
-/// [`record_health_result`]: the full boot ordering cannot be exercised
-/// without a GPUI app context (gpui's `test-support` is not a dependency),
-/// so the test replays the exact initialize sequence over these helpers.
+/// Pure snapshot → capability-status derivation, unit-tested in storage.test.rs
+/// (the full boot ordering needs a GPUI app context tests can't construct).
 pub(super) fn capability_status(
     supported: bool,
     snapshot: &StorageSnapshot,
@@ -340,56 +320,11 @@ fn db_path(cx: &App) -> PathBuf {
     crate::app_state::paths(cx).data_dir.join("app.db")
 }
 
+/// Open (or create) the database and apply migrations from `persistence` —
+/// the single source of truth for the schema. Returns the schema version.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn init_db(path: &PathBuf) -> rusqlite::Result<i64> {
+pub(crate) fn init_db(path: &Path) -> anyhow::Result<i64> {
     let conn = rusqlite::Connection::open(path)?;
-    conn.execute_batch(
-        r#"
-        PRAGMA journal_mode = WAL;
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS kv_store (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS error_log (
-            id TEXT PRIMARY KEY,
-            occurred_at TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            category TEXT NOT NULL,
-            message TEXT NOT NULL,
-            actions TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_error_log_occurred_at
-            ON error_log (occurred_at DESC);
-        CREATE TABLE IF NOT EXISTS crash_reports (
-            id TEXT PRIMARY KEY,
-            panic_message TEXT NOT NULL,
-            backtrace TEXT NOT NULL,
-            app_version TEXT NOT NULL,
-            os TEXT NOT NULL,
-            arch TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            render_path BOOLEAN NOT NULL DEFAULT 0,
-            recent_errors TEXT NOT NULL DEFAULT "[]",
-            uploaded BOOLEAN NOT NULL DEFAULT 0,
-            uploaded_at TEXT,
-            upload_error TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_crash_reports_timestamp
-            ON crash_reports (timestamp DESC);
-        CREATE INDEX IF NOT EXISTS idx_crash_reports_uploaded
-            ON crash_reports (uploaded);
-    "#,
-    )?;
-
-    let current_version = 3_i64;
-    conn.execute(
-        "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
-        [current_version],
-    )?;
-    Ok(current_version)
+    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+    Ok(crate::db_migrations::run_migrations(&conn)? as i64)
 }

@@ -1,24 +1,19 @@
 use gpui::{App, BorrowAppContext as _, Global};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SessionState {
+    #[default]
     SignedOut,
     SigningIn,
-    SignedIn { account_label: String },
+    SignedIn {
+        account_label: String,
+    },
     Error(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SessionSnapshot {
     pub state: SessionState,
-}
-
-impl Default for SessionSnapshot {
-    fn default() -> Self {
-        Self {
-            state: SessionState::SignedOut,
-        }
-    }
 }
 
 impl Global for SessionSnapshot {}

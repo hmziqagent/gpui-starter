@@ -23,10 +23,8 @@ use crate::notifications::{
     NotificationRequest,
 };
 
-// async_trait's generated wrapper fns carry #[must_use] and return boxed
-// futures (already #[must_use]) — new nightly clippy flags the generated code
-// as double_must_use. The attribute is macro-emitted, so the allow lives here
-// at the macro use site.
+// nightly clippy flags async_trait's generated #[must_use] wrappers as
+// double_must_use; the allow lives here since the attribute is macro-emitted.
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait NotificationBackend: Send + Sync {
@@ -37,21 +35,11 @@ pub trait NotificationBackend: Send + Sync {
     async fn send(&self, request: &NotificationRequest) -> anyhow::Result<()>;
 }
 
-// --- Web Notifications mapping helpers (target-neutral) ------------------------
-//
-// Pure functions so the Web-permission mapping is unit-testable on native
-// builds; only the wasm-only `WebNotificationBackend` calls them at runtime.
-// They live HERE (not in `service::types`) because `service::types` is
-// private to the `service` subtree — this backend module cannot path to it,
-// and the fixed re-export lists are outside this module's control.
+// Web Notifications mapping helpers, kept here (not `service::types`) so the
+// permission mapping stays unit-testable on native builds.
 
-/// Map a Web Notifications permission string — `Notification.permission` or
-/// the `requestPermission()` resolution value — onto
-/// [`NotificationPermissionState`].
-///
-/// The spec enum is exactly `"granted" | "denied" | "default"`; any other
-/// value (a future spec addition, junk, wrong casing, the Permissions API's
-/// `"prompt"`) maps to `Unknown` instead of guessing.
+/// Map a Web Notifications permission string onto [`NotificationPermissionState`].
+/// Anything outside `"granted" | "denied" | "default"` maps to `Unknown`.
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 pub(crate) fn web_permission_to_state(permission: &str) -> NotificationPermissionState {
     match permission {
@@ -63,20 +51,14 @@ pub(crate) fn web_permission_to_state(permission: &str) -> NotificationPermissio
 }
 
 /// `NotificationOptions.tag` for a request: `thread_id` doubles as the web
-/// tag, so same-thread notifications replace each other in the OS tray
-/// (matching the per-thread coalescing the desktop backends get from the
-/// daemon). `None` leaves the tag unset — every notification stacks.
+/// tag, so same-thread notifications replace each other in the OS tray.
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 pub(crate) fn web_tag_for_request(request: &NotificationRequest) -> Option<String> {
     request.thread_id.clone()
 }
 
-/// Wasm: there is no OS notification daemon. With the Web Notifications API
-/// taking the primary slot, this no-op backend keeps the secondary slot so
-/// the service keeps its primary/secondary shape — when the web backend is
-/// missing (very old browsers) or unauthorized, every send fails through it
-/// and the notification service falls back to the in-app toast + inbox
-/// policy (pure gpui, works in the browser).
+/// Wasm: no OS notification daemon exists — this no-op backend keeps the
+/// secondary slot so every send through it fails into the in-app policy.
 #[cfg(target_family = "wasm")]
 pub struct WasmStubBackend;
 

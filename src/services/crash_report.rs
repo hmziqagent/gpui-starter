@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use gpui::App;
@@ -8,9 +6,12 @@ use gpui::BorrowAppContext as _;
 use gpui::Global;
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// CrashReport data model
-// ---------------------------------------------------------------------------
+// Caps keep reports (and the upload payload) bounded; scrubbing keeps the
+// user's home path out of anything that leaves the machine.
+const MAX_PANIC_MESSAGE_CHARS: usize = 2048;
+const MAX_BACKTRACE_CHARS: usize = 8192;
+const MAX_RECENT_ERRORS: usize = 20;
+const MAX_RECENT_ERROR_CHARS: usize = 512;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CrashReport {
@@ -34,21 +35,34 @@ impl CrashReport {
     ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            panic_message,
-            backtrace,
+            panic_message: scrub(&panic_message, MAX_PANIC_MESSAGE_CHARS),
+            backtrace: scrub(&backtrace, MAX_BACKTRACE_CHARS),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             render_path,
-            recent_errors,
+            recent_errors: recent_errors
+                .into_iter()
+                .take(MAX_RECENT_ERRORS)
+                .map(|err| scrub(&err, MAX_RECENT_ERROR_CHARS))
+                .collect(),
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// GPUI Global snapshot
-// ---------------------------------------------------------------------------
+/// Replace home-dir prefixes with `~` and cap length (reports get uploaded).
+fn scrub(text: &str, max_chars: usize) -> String {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let scrubbed = if home.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(&home, "~")
+    };
+    scrubbed.chars().take(max_chars).collect()
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct CrashReportSnapshot {
@@ -59,10 +73,6 @@ pub struct CrashReportSnapshot {
 }
 
 impl Global for CrashReportSnapshot {}
-
-// ---------------------------------------------------------------------------
-// Initialization
-// ---------------------------------------------------------------------------
 
 pub fn initialize(cx: &mut App) {
     let endpoint = option_env!("GPUI_CRASH_REPORT_URL")
@@ -89,14 +99,8 @@ pub fn snapshot(cx: &App) -> CrashReportSnapshot {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// File-based crash report I/O (synchronous, for panic handler)
-// ---------------------------------------------------------------------------
-
 /// Write a crash report as JSON to `{data_dir}/crash_reports/{id}.json`.
-///
-/// This is intentionally synchronous and uses `std::fs` because it is called
-/// from the panic hook where async I/O is not available.
+/// Intentionally synchronous `std::fs`: the panic hook has no async runtime.
 pub fn write_crash_report(report: &CrashReport, data_dir: &Path) -> std::io::Result<()> {
     let reports_dir = data_dir.join("crash_reports");
     std::fs::create_dir_all(&reports_dir)?;
@@ -115,7 +119,6 @@ pub fn write_crash_report(report: &CrashReport, data_dir: &Path) -> std::io::Res
 }
 
 /// Scan a directory for `.json` crash report files and parse them.
-///
 /// Non-JSON files and malformed entries are silently skipped.
 pub fn detect_pending_reports(data_dir: &Path) -> Vec<CrashReport> {
     let reports_dir = data_dir.join("crash_reports");
@@ -149,25 +152,15 @@ pub fn detect_pending_reports(data_dir: &Path) -> Vec<CrashReport> {
         }
     }
 
-    // Sort by timestamp descending (newest first).
+    // Newest first.
     reports.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     reports
 }
 
-// ---------------------------------------------------------------------------
-// Upload pending reports (async)
-// ---------------------------------------------------------------------------
-
-/// Read pending reports from SQLite, POST each as JSON to the configured
-/// endpoint, and mark them as uploaded on success.
-///
-/// Silently returns when the upload endpoint is empty or the storage backend
-/// is not available.
-///
-/// Wasm: crash reports are born on disk from the native panic hook
-/// (`write_crash_report`), which has no wasm counterpart — so even though
-/// the OPFS storage backend now implements the full trait surface, there is
-/// never a pending report to upload and this stays a no-op.
+/// Read pending reports from SQLite, POST each to the configured endpoint,
+/// and mark them uploaded on success. No-op without an endpoint or backend.
+/// Wasm has no report producer (the native panic hook owns that), so it
+/// degrades to a debug log.
 #[cfg(not(target_family = "wasm"))]
 pub fn upload_pending_reports(cx: &mut App) {
     let snap = snapshot(cx);
@@ -290,39 +283,26 @@ pub fn upload_pending_reports(cx: &mut App) {
             }
         }
 
-        // Update snapshot with the latest pending count and timestamp.
-        // A single `load_pending_crash_reports(1)` query yields both values;
-        // previously two identical queries ran here back-to-back.
+        // One 1-row query yields both the pending count and newest timestamp.
         let backend = backend.clone();
+        let latest = cx
+            .background_executor()
+            .spawn(async move { backend.load_pending_crash_reports(1).await })
+            .await;
+        let (count, timestamp) = match latest {
+            Ok(r) => (r.len(), r.first().map(|r| r.timestamp.clone())),
+            Err(_) => (0, None),
+        };
         let _ = cx.update(|cx| {
-            let pending = cx
-                .background_executor()
-                .spawn(async move { backend.load_pending_crash_reports(1).await });
-            cx.spawn(async move |cx| {
-                let (count, timestamp) = match pending.await {
-                    Ok(r) => (r.len(), r.first().map(|r| r.timestamp.clone())),
-                    Err(_) => (0, None),
-                };
-                let _ = cx.update(|cx| {
-                    cx.update_global::<CrashReportSnapshot, _>(|snap, _cx| {
-                        snap.pending_count = count;
-                        snap.last_crash_timestamp = timestamp;
-                    });
-                });
-            })
-            .detach();
+            cx.update_global::<CrashReportSnapshot, _>(|snap, _cx| {
+                snap.pending_count = count;
+                snap.last_crash_timestamp = timestamp;
+            });
         });
     })
     .detach();
 }
 
-// ---------------------------------------------------------------------------
-// Shutdown
-// ---------------------------------------------------------------------------
-
-/// Wasm counterpart of [`upload_pending_reports`]: crash reports have no
-/// wasm producer (the panic hook writes them to disk natively), so there is
-/// nothing to upload.
 #[cfg(target_family = "wasm")]
 pub fn upload_pending_reports(_cx: &mut App) {
     tracing::debug!(
@@ -336,13 +316,8 @@ pub fn shutdown(cx: &mut App) {
         target: "gpui_starter::crash_report",
         "crash report service shutdown requested"
     );
-    // Attempt a final flush of pending uploads.
     upload_pending_reports(cx);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[path = "crash_report.test.rs"]

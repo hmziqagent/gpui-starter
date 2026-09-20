@@ -1,15 +1,5 @@
-//! XDG Desktop Portal notification backend (Flatpak / Snap / sandboxed runs).
-//!
-//! Enabled with the `notifications-portal` feature. Sandboxed apps must not
-//! reach `org.freedesktop.Notifications` directly — they go through
-//! `org.freedesktop.portal.Notification`. Selected automatically by
-//! [`NotificationService::new`](super::super::service::backend_service::NotificationService)
-//! when [`crate::platform::environment::is_sandboxed`] is true.
-//!
-//! ashpd is built on zbus/async-io here (NOT tokio — zbus forbids both, and
-//! notify-rust already selects async-io). zbus drives its own background thread,
-//! so these futures are safe to await directly in the async trait, exactly like
-//! notify-rust's `show_async`.
+//! XDG Desktop Portal notification backend (Flatpak/Snap, `notifications-portal`
+//! feature), selected when sandboxed. ashpd/zbus drive their own executor thread.
 
 #![cfg(feature = "notifications-portal")]
 
@@ -23,8 +13,8 @@ use crate::notifications::{
 
 const LOG: &str = "gpui_starter::notifications::portal";
 
-/// Portal notification backend (no runtime handle needed — ashpd drives zbus's
-/// own async-io executor thread).
+/// Portal notification backend (no runtime handle needed — ashpd drives
+/// zbus's own async-io executor thread).
 pub struct PortalBackend;
 
 impl PortalBackend {
@@ -61,9 +51,8 @@ impl NotificationBackend for PortalBackend {
     async fn send(&self, request: &NotificationRequest) -> anyhow::Result<()> {
         tracing::info!(target: LOG, title = %request.title, "sending notification through the XDG portal");
 
-        // NOTE: the portal offers NO display confirmation — a successful
-        // AddNotification only means the portal accepted it, not that the user
-        // actually saw it.
+        // A successful AddNotification only means the portal accepted it —
+        // there is no display confirmation.
         let proxy = ashpd::desktop::notification::NotificationProxy::new().await?;
         let notification = ashpd::desktop::notification::Notification::new(&request.title)
             .body(request.body.as_str());

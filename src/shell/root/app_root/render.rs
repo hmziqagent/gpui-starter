@@ -152,9 +152,7 @@ impl Render for AppRoot {
                 this.error_page = None;
                 cx.notify();
             }))
-            // Error boundary: action-based trigger (used by error playground to
-            // test the boundary UI without causing a real render panic, which is
-            // process-fatal in GPUI due to the Metal extern "C" callback).
+            // Test the boundary UI without a real render panic (fatal in GPUI).
             .on_action(cx.listener(|this, action: &TriggerRenderError, _, cx| {
                 tracing::info!(
                     target: "gpui_starter::root",

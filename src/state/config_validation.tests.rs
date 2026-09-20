@@ -1,8 +1,5 @@
-//! Unit tests for [`super::validate_config`].
-//!
-//! Style note: each test mutates exactly one field of an otherwise-default
-//! [`AppConfig`] and asserts the matching lint fires, mirroring the
-//! `config_store.test.rs` convention of `..AppConfig::default()` overrides.
+//! Unit tests for [`super::validate_config`]: each test mutates one field of
+//! an otherwise-default [`AppConfig`] and asserts the matching lint fires.
 
 use std::collections::HashSet;
 

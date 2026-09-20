@@ -4,16 +4,9 @@ use std::path::PathBuf;
 use gpui::actions;
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
 actions!(updater, [CheckForUpdates]);
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
+// Serialize is load-bearing: tests/snapshot_tests.rs pins these as yaml.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum UpdateStatus {
     Idle,
@@ -59,11 +52,7 @@ pub struct UpdateSnapshot {
 
 impl gpui::Global for UpdateSnapshot {}
 
-// ---------------------------------------------------------------------------
-// Manifest types
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateManifest {
     pub version: String,
     #[serde(default)]
@@ -72,8 +61,9 @@ pub struct UpdateManifest {
     pub platforms: std::collections::HashMap<String, PlatformAsset>,
 }
 
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
-#[allow(dead_code)]
+// Fields are read only by the native download path; wasm keeps the parse shape.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PlatformAsset {
     pub url: String,
     #[serde(default)]
@@ -82,18 +72,12 @@ pub struct PlatformAsset {
     pub size: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 pub(crate) const DEFAULT_MANIFEST_URL: &str = match option_env!("GPUI_UPDATE_MANIFEST_URL") {
     Some(url) => url,
     None => "https://releases.example.com/manifest.json",
 };
 
-/// Hardcoded Ed25519 public key for update manifest signature verification.
-/// The corresponding private key is stored in CI secrets (UPDATE_SIGNING_KEY).
-/// Replace this with your actual public key when deploying.
+/// Ed25519 public key matching `UPDATE_SIGNING_KEY` in CI; swap it to deploy.
 pub(crate) const UPDATER_PUBLIC_KEY: &[u8; 32] = include_bytes!("../updater_public_key.bin");
 
 pub(crate) const MAX_UPDATE_RETRIES: u32 = 3;
@@ -115,22 +99,24 @@ pub(crate) fn platform_key() -> String {
     format!("{os}-{arch}")
 }
 
-// Native-only: `std::env::temp_dir()` panics at runtime on
-// wasm32-unknown-unknown ("no filesystem on this platform"), and both callers
-// (apply_update / check_pending_swap) are wasm no-ops.
+// Native-only: file paths panic at runtime on wasm32-unknown-unknown, and
+// both callers (apply_update / check_pending_swap) are wasm no-ops.
+
+/// App-owned downloads + swap directory under the user's data dir, so the
+/// write target is not a world-shared, attacker-creatable temp path.
+/// `None` (no data dir / cannot create it) fails closed.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn pending_swap_path() -> PathBuf {
-    crate::platform::filesystem::paths::project_dirs()
-        .map(|pd| {
-            let dir = pd.data_dir().join("updates");
-            let _ = std::fs::create_dir_all(&dir);
-            dir.join("pending-swap.json")
-        })
-        .unwrap_or_else(|| {
-            let dir = std::env::temp_dir().join("gpui-starter-updates");
-            let _ = std::fs::create_dir_all(&dir);
-            dir.join("pending-swap.json")
-        })
+pub(crate) fn updates_dir() -> Option<PathBuf> {
+    let dir = crate::platform::filesystem::paths::project_dirs()?
+        .data_dir()
+        .join("updates");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn pending_swap_path() -> Option<PathBuf> {
+    Some(updates_dir()?.join("pending-swap.json"))
 }
 
 pub(crate) fn current_app_version() -> String {

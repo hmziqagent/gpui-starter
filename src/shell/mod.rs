@@ -1,4 +1,3 @@
-pub mod app_menu;
 pub mod menus;
 pub mod root;
 pub mod route;

@@ -10,16 +10,12 @@ use super::helpers::QuerySort;
 use super::mutations::render_mutations_table;
 use super::registry::render_query_registry;
 
-// ---------------------------------------------------------------------------
-// Query DevTools V2 Page
-// ---------------------------------------------------------------------------
-
 pub struct QueryDevToolsV2Page {
     _subscriptions: Vec<Subscription>,
     pub(super) expanded_key: Option<String>,
     pub(super) sort_by: QuerySort,
-    /// Status filter: `None` means "show all", `Some(String)` must be a valid
-    /// `QueryStatus` variant name (e.g. "Idle", "Success"). See Audit Finding 4.
+    /// Status filter: `None` shows all; `Some(String)` must be a valid
+    /// `QueryStatus` variant name (e.g. "Idle", "Success").
     pub(super) status_filter: Option<String>,
     /// Scroll handle for the virtualized query registry list.
     pub(super) scroll_handle: gpui_component::VirtualListScrollHandle,
@@ -28,20 +24,8 @@ pub struct QueryDevToolsV2Page {
 impl QueryDevToolsV2Page {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = Vec::new();
-        // KNOWN LIMITATION (gpui-query architecture, verified in 0.1.4 and 0.2.0):
-        // this dashboard refreshes only when the `QueryClient` *global* is mutated
-        // — i.e. via `update_global::<QueryClient, _>` / `global_mut` / `set_global`,
-        // which push GPUI's `NotifyGlobalObservers` effect. gpui-query routes only
-        // fetch-start / hook-setup through `update_global` (resource creation,
-        // request-id allocation, mutation registration). Query/mutation/infinite
-        // *completions* (`complete_success` / `complete_failure`) write via a bare
-        // `entity.update(...)` on the resource entity, which wakes only
-        // `cx.observe(&entity)` subscribers — never this global observer. So a
-        // resolved query can show stale status here until the next global mutation
-        // (another query starting, GC, or a toolbar action). Making completions
-        // refresh live requires gpui-query to route those completion writes through
-        // `update_global` (or emit a dirty signal) — see the gpui-query design doc,
-        // "Required Core Change 2". A short-term workaround is a polling timer.
+        // Refreshes only on QueryClient global mutations; gpui-query writes
+        // completions straight to resource entities, so statuses go stale here.
         subscriptions.push(cx.observe_global_in::<QueryClient>(window, |_, _, cx| {
             cx.notify();
         }));
@@ -77,10 +61,6 @@ impl Render for QueryDevToolsV2Page {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Empty State
-// ---------------------------------------------------------------------------
-
 fn render_empty_state(cx: &mut Context<QueryDevToolsV2Page>) -> Div {
     let theme = cx.theme();
     div()
@@ -108,10 +88,6 @@ fn render_empty_state(cx: &mut Context<QueryDevToolsV2Page>) -> Div {
         )
 }
 
-// ---------------------------------------------------------------------------
-// Dashboard
-// ---------------------------------------------------------------------------
-
 fn render_dashboard(
     diagnostic: &Option<gpui_query::client::ClientDiagnostic>,
     expanded_key: &Option<String>,
@@ -125,10 +101,8 @@ fn render_dashboard(
     let border = theme.border;
     let muted = theme.muted;
     let muted_foreground = theme.muted_foreground;
-    let _ = theme;
 
-    // Use actual collected lengths (skips dead/GC'd entries) rather than
-    // bucket.count() which includes stale weak references (Audit Finding 7).
+    // Actual collected lengths, not bucket.count() which includes stale weak refs.
     let query_count = diagnostic.as_ref().map(|d| d.queries.len()).unwrap_or(0);
     let mutation_count = diagnostic.as_ref().map(|d| d.mutations.len()).unwrap_or(0);
     let cache_entries = diagnostic
@@ -150,7 +124,6 @@ fn render_dashboard(
         })
         .unwrap_or(0);
 
-    // Hero banner
     let hero = div()
         .rounded(radius_lg)
         .border_1()
@@ -170,7 +143,6 @@ fn render_dashboard(
                 .child("Live diagnostics dashboard for gpui-query-v2's QueryClient."),
         );
 
-    // Overview cards (4 in a row)
     let overview = h_flex().gap_4().children(vec![
         stat_card(
             "Total Queries",
@@ -206,10 +178,8 @@ fn render_dashboard(
         ),
     ]);
 
-    // Action bar (5 buttons)
     let actions = render_action_bar(cx);
 
-    // Query registry table
     let registry = render_query_registry(
         diagnostic,
         expanded_key,
@@ -219,7 +189,6 @@ fn render_dashboard(
         cx,
     );
 
-    // Mutations table
     let mutations = render_mutations_table(diagnostic, cx);
 
     div()
@@ -232,10 +201,6 @@ fn render_dashboard(
         .child(registry)
         .child(mutations)
 }
-
-// ---------------------------------------------------------------------------
-// Stat Card
-// ---------------------------------------------------------------------------
 
 fn stat_card(
     label: &str,
@@ -261,16 +226,11 @@ fn stat_card(
         )
 }
 
-// ---------------------------------------------------------------------------
-// Action Bar
-// ---------------------------------------------------------------------------
-
 fn render_action_bar(cx: &mut Context<QueryDevToolsV2Page>) -> Div {
     let theme = cx.theme();
     let radius_lg = theme.radius_lg;
     let border = theme.border;
     let muted = theme.muted;
-    let _ = theme;
 
     let has_client = cx.has_global::<QueryClient>();
 

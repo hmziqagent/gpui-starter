@@ -75,13 +75,6 @@ fn accepts_deep_link_with_clean_query_params() {
 }
 
 #[test]
-fn sanitize_control_chars_helper() {
-    assert_eq!(sanitize_control_chars("hello\tworld\n"), "helloworld");
-    assert_eq!(sanitize_control_chars("clean"), "clean");
-    assert_eq!(sanitize_control_chars("\x07bell\x1besc"), "bellesc");
-}
-
-#[test]
 fn validate_path_segment_helper() {
     assert!(validate_path_segment("notifications").is_ok());
     assert!(validate_path_segment("..").is_err());
@@ -170,10 +163,8 @@ fn from_hash_rejects_unknown_and_unsafe_hashes() {
 
 #[test]
 fn from_hash_neutralizes_plain_dot_segments_via_url_parsing() {
-    // Plain `..` is normalized away by the `url` crate DURING parsing
-    // (dot-segment removal), so it never reaches the traversal validator —
-    // it resolves to the parent route instead. Locking that in: the outcome
-    // is safe either way, but it must stay deterministic.
+    // Plain `..` is dot-segment-normalized by the `url` crate before the
+    // validator sees it; the safe outcome must stay deterministic.
     assert_eq!(
         AppRoute::from_hash("#/settings/..").unwrap(),
         AppRoute::Page(Page::Settings)

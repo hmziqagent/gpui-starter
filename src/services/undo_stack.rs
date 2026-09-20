@@ -41,16 +41,14 @@ pub fn snapshot(cx: &App) -> UndoState {
 }
 
 pub fn can_undo(cx: &App) -> Option<String> {
-    snapshot(cx)
-        .past
-        .last()
+    cx.try_global::<UndoState>()
+        .and_then(|state| state.past.last())
         .map(|entry| entry.undo_label.clone())
 }
 
 pub fn can_redo(cx: &App) -> Option<String> {
-    snapshot(cx)
-        .future
-        .last()
+    cx.try_global::<UndoState>()
+        .and_then(|state| state.future.last())
         .map(|entry| entry.redo_label.clone())
 }
 
@@ -72,6 +70,8 @@ pub fn record_theme_mode_change(before: ThemeMode, after: ThemeMode, cx: &mut Ap
 }
 
 pub fn undo(cx: &mut App) -> bool {
+    // The intermediate store publishes `applying = true` so a reentrant
+    // `record` during apply is suppressed; the apply itself clears it.
     let state = cx.default_global::<UndoState>();
     let mut model = UndoModel::from_state(std::mem::take(state));
     let Some(entry) = model.pop_undo() else {
@@ -79,8 +79,7 @@ pub fn undo(cx: &mut App) -> bool {
         return false;
     };
     model.applying = true;
-    *state = model.clone().into_state();
-    let _ = state;
+    *state = model.into_state();
     apply_inverse(&entry.kind, cx);
     let state = cx.default_global::<UndoState>();
     let mut model = UndoModel::from_state(std::mem::take(state));
@@ -98,8 +97,7 @@ pub fn redo(cx: &mut App) -> bool {
         return false;
     };
     model.applying = true;
-    *state = model.clone().into_state();
-    let _ = state;
+    *state = model.into_state();
     apply_forward(&entry.kind, cx);
     let state = cx.default_global::<UndoState>();
     let mut model = UndoModel::from_state(std::mem::take(state));

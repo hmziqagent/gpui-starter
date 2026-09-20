@@ -1,35 +1,20 @@
 use gpui::{prelude::*, *};
 use gpui_component::{ActiveTheme as _, button::Button, v_flex};
 
-// ---------------------------------------------------------------------------
-// Action: reload the page that triggered the render panic
-// ---------------------------------------------------------------------------
-
 /// Clear the error boundary and retry rendering the active page.
 #[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
 #[action(namespace = app, no_json)]
 pub struct ReloadCurrentPage;
 
-/// Activate the error boundary with a custom message.
-///
-/// This is the action-based trigger used by the error playground (and any
-/// future test harness) to exercise the error boundary UI without causing a
-/// real render panic. A real render panic is process-fatal in GPUI because it
-/// propagates through an `extern "C"` Metal callback where unwinding is not
-/// possible, so we simulate the recovery flow via action dispatch instead.
+/// Activate the error boundary with a custom message. Render panics are
+/// process-fatal in GPUI, so tests exercise the boundary via this action.
 #[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
 #[action(namespace = app, no_json)]
 pub struct TriggerRenderError {
     pub message: String,
 }
 
-// ---------------------------------------------------------------------------
-// RenderErrorPage
-// ---------------------------------------------------------------------------
-
-/// Fallback view displayed by the error boundary when a page's render method
-/// panics. Shows a human-readable summary and a "Reload" button that clears
-/// the error state and retries the original page.
+/// Fallback view shown by the error boundary when a page render panics.
 pub struct RenderErrorPage {
     summary: String,
 }
@@ -55,7 +40,6 @@ impl Render for RenderErrorPage {
                     .items_center()
                     .gap_3()
                     .max_w(px(480.))
-                    // Error title
                     .child(
                         div()
                             .text_xl()
@@ -63,14 +47,12 @@ impl Render for RenderErrorPage {
                             .text_color(cx.theme().danger)
                             .child("Render Error"),
                     )
-                    // Summary text
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(SharedString::from(summary)),
                     )
-                    // Reload button
                     .child(
                         Button::new("reload-current-page")
                             .label("Reload Page")

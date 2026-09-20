@@ -6,27 +6,17 @@ use std::sync::Mutex;
 
 use super::{StorageBackend, StorageError};
 
-/// SQLite-backed storage that holds a single shared connection rather than
-/// opening a new one on every operation. The connection is wrapped in
-/// `Arc<Mutex<Connection>>` because `rusqlite::Connection` is `Send` but not
-/// `Sync`, so every call serialises behind the mutex automatically.
-///
-/// The trait is async, but these bodies stay synchronous (no await points):
-/// the boxed future resolves on its first poll, so SQLite I/O still never
-/// yields mid-query and the `MutexGuard` never crosses a yield.
+/// SQLite-backed storage sharing one connection. `Connection` is `Send` but
+/// not `Sync`, so all calls serialise behind a mutex; the async bodies have
+/// no await points, so the `MutexGuard` never crosses a yield.
 #[derive(Clone, Debug)]
 pub(crate) struct SqliteStorage {
     conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteStorage {
-    /// Open (or create) the database at `path` and return a storage handle
-    /// that reuses the same connection for all future operations.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the database file cannot be opened (boot-time invariant;
-    /// the storage runtime treats initialization separately via `init_db`).
+    /// Open (or create) the database at `path`; panics if it cannot be opened
+    /// (boot-time invariant — the storage runtime treats init separately).
     pub(crate) fn new(path: PathBuf) -> Self {
         let conn = Connection::open(&path).expect("failed to open sqlite connection");
         Self {
@@ -34,21 +24,12 @@ impl SqliteStorage {
         }
     }
 
-    /// Constructor for unit tests that need a `SqliteStorage` pointing at an
-    /// arbitrary path (bypasses the normal app-state path resolution).
+    /// Test-only alias used by error_surface.test.rs (an arbitrary db path).
     #[cfg(test)]
     pub fn new_for_test(path: PathBuf) -> Self {
-        let conn = Connection::open(&path).expect("failed to open sqlite connection for test");
-        Self {
-            conn: Arc::new(Mutex::new(conn)),
-        }
+        Self::new(path)
     }
 
-    /// Acquire the shared connection lock.
-    ///
-    /// Callers should hold the lock only for the minimum time needed for
-    /// their query and drop it immediately afterwards so other tasks are
-    /// not blocked.
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().expect("storage connection mutex poisoned")
     }

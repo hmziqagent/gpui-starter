@@ -150,8 +150,9 @@ pub enum WorkerResult {
 }
 
 impl WorkerResult {
-    /// The op name this payload answers — used to build protocol-mismatch
-    /// errors when the worker replies with the wrong shape.
+    /// Op name this payload answers — read only by the wasm backend's
+    /// protocol-mismatch path (gated so native test builds don't see it dead).
+    #[cfg(target_family = "wasm")]
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::SchemaVersion(_) => "schema-version",

@@ -52,8 +52,6 @@ impl QueryPlaygroundPage {
         )
         .child(
             h_flex().gap_2().items_center().px_4().py_2()
-                // Finding 1/8: Replace static div with a proper editable Input
-                // component that binds to mutation_input_state.
                 .child(
                     div().min_w(px(200.))
                         .child(Input::new(&self.mutation_input_state))
@@ -130,13 +128,8 @@ impl QueryPlaygroundPage {
             });
         let loading = inf_status.is_loading();
 
-        // Derive the button-enabled state from the ACTUAL loaded page range
-        // (data lives in pages 0..=10), NOT from the crate's has_next/has_previous
-        // flags. Those flags are only updated for the direction that was last
-        // fetched, so they go stale and disable the wrong button (e.g. after a
-        // "previous" load, "next" would wrongly disable). The crate flag is only
-        // a fetch gate; `load_next_page`/`load_prev_page` force it to true before
-        // fetching, and we compute the real boundaries here for display.
+        // Derive button state from the actual loaded page range: the crate's
+        // has_next/has_previous flags only track the last-fetched direction.
         let (first_pg, last_pg) = self
             .infinite_entity
             .as_ref()
@@ -157,8 +150,7 @@ impl QueryPlaygroundPage {
             .map(|(e, _)| {
                 let mut result = Vec::new();
                 e.read_with(cx, |r, _| {
-                    // gpui-query 0.2 stores pages as `Arc<T>`, so cloning the
-                    // item already yields the shared `Arc` we render from.
+                    // gpui-query stores pages as Arc<T>; cloning yields the shared Arc.
                     for (i, page) in r.pages().iter().enumerate() {
                         result.push((i, page.clone()));
                     }

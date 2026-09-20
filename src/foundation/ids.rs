@@ -29,4 +29,3 @@ macro_rules! typed_id {
 typed_id!(EventId);
 typed_id!(NotificationId);
 typed_id!(TaskId);
-typed_id!(CorrelationId);

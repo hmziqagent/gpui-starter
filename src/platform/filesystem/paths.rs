@@ -1,21 +1,11 @@
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
 use crate::errors::AppError;
 
-/// Resolve the canonical [`ProjectDirs`] for this application.
-///
-/// All call sites that need the OS-standard config/data/cache layout must go
-/// through here so the qualifying triple (`"com"`, `"gpui-starter"`,
-/// `"GPUI Starter"`) lives in exactly one place.
-///
-/// This is a plain free fn with no GPUI `App`/global dependency so it is safe
-/// to call pre-`App` (e.g. from `single_instance` preflight). Prefer this over
-/// [`AppPaths::new`], which eagerly `create_dir_all`s several directories and
-/// is built lazily off a GPUI global.
+/// Canonical [`ProjectDirs`] for this application. Plain free fn, safe to call
+/// before any GPUI `App` exists (e.g. single-instance preflight).
 pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("com", "gpui-starter", "GPUI Starter")
 }
@@ -55,9 +45,8 @@ impl AppPaths {
         })
     }
 
-    /// In-memory fallback used on wasm, where `directories` cannot resolve OS
-    /// standard directories. Every path is empty — persistence layers treat
-    /// writes against these as no-ops and run from defaults.
+    /// In-memory wasm fallback: `directories` cannot resolve OS directories,
+    /// so every path is empty and persistence layers treat writes as no-ops.
     #[cfg(target_family = "wasm")]
     pub fn fallback() -> Self {
         Self {

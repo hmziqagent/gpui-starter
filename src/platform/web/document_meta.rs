@@ -1,22 +1,5 @@
-//! Tray-equivalent for the browser tab: dynamic favicon + `document.title`.
-//!
-//! Desktop builds surface app state through the tray icon; the web
-//! equivalent is the tab itself:
-//!
-//! - a canvas-drawn favicon (base square + unread-count badge from
-//!   [`crate::notifications::inbox::unread_count`] + a connectivity state
-//!   dot), exported as a `data:` URL onto a runtime-created
-//!   `<link rel="icon">` — no `index.html` dependency (area A's static
-//!   manifest icon keeps covering install banners);
-//! - `document.title` = `"<app> — <route title>"` plus `(<unread>)` when
-//!   nonzero and a `— Offline` / `— Filtered` connectivity suffix.
-//!
-//! Driven by `cx.observe_global` on the notification inbox, the
-//! connectivity snapshot, and the config store (route changes persist
-//! through `app_state::update_config`, so its global covers navigation).
-//! A small key cache skips canvas redraws when nothing visual changed — the
-//! config global also fires for window-resize persists, which must not
-//! churn the favicon.
+//! Browser-tab tray equivalent: canvas favicon with unread/connectivity badge
+//! plus a `document.title` mirror, driven by the app globals.
 
 use std::sync::Mutex;
 
@@ -110,8 +93,7 @@ fn render_favicon(unread: usize, state: &ConnectivityState) -> Option<String> {
     ctx.set_fill_style_str("#2563eb");
     ctx.fill_rect(0.0, 0.0, size, size);
 
-    // Connectivity dot, bottom-right, with a white ring so it reads on any
-    // tab bar background.
+    // Connectivity dot, bottom-right, white ring for contrast on any tab bar.
     let dot = state_color(state);
     ctx.begin_path();
     ctx.set_fill_style_str("#ffffff");

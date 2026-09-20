@@ -5,13 +5,8 @@ use crate::{errors::AppError, sidebar::Page};
 
 pub const APP_URL_SCHEME: &str = "gpui-starter";
 
-/// Hosts that are recognized as valid deep link targets.
-///
-/// Derived entirely from [`Page::host`](crate::sidebar::Page::host) — the
-/// `Page` enum is the single source of truth for the route set, so this list
-/// cannot drift from `to_url` / `parse_deep_link`. `validate_deep_link_url`
-/// in `foundation::validation` reuses this list so deep-link validation and
-/// route parsing also stay in sync.
+/// Valid deep-link hosts, derived from [`Page::host`](crate::sidebar::Page::host)
+/// so the parser, `to_url`, and foundation validation cannot drift.
 pub(crate) const VALID_HOSTS: &[&str] = &[
     Page::Home.host(),
     Page::Form.host(),
@@ -26,12 +21,6 @@ pub(crate) const VALID_HOSTS: &[&str] = &[
 
 /// Characters that are not permitted in path segments.
 const INVALID_SEGMENT_CHARS: &[char] = &['/', '\\', '\0', '<', '>', '|', '"'];
-
-/// Strip control characters (U+0000–U+001F and U+007F) from a string,
-/// returning a sanitized copy suitable for safe use.
-fn sanitize_control_chars(input: &str) -> String {
-    input.chars().filter(|c| !c.is_control()).collect()
-}
 
 /// Reject path segments that contain traversal sequences or other dangerous
 /// characters. Returns `Ok(())` when the segment is safe.
@@ -103,11 +92,8 @@ impl AppRoute {
         }
     }
 
-    /// Hash-URL form for the web (`#/settings`): the same host/segment
-    /// layout as [`AppRoute::to_url`] minus the scheme, behind a `#` so it
-    /// works as a `location.hash` deep link. Pure function — runs on every
-    /// target; only the wasm router (`src/platform/web/router.rs`) feeds it
-    /// to the History API.
+    /// Hash-URL form for the web (`#/settings`) — same layout as [`to_url`](Self::to_url)
+    /// behind a `#`; only the wasm router feeds this to the History API.
     pub fn to_hash(&self) -> String {
         match self {
             Self::Page(page) => format!("#/{}", page.host()),
@@ -115,16 +101,8 @@ impl AppRoute {
         }
     }
 
-    /// Parse a `location.hash` fragment (`#/settings`,
-    /// `#/settings/notifications`) into a route.
-    ///
-    /// Accepts an optional leading `#` and an empty path (empty / `#` /
-    /// `#/` all resolve to [`AppRoute::default`], so a bare page load never
-    /// fails route resolution). Everything else goes through the SAME
-    /// validation as [`AppRoute::parse_deep_link`] — the hash path is lifted
-    /// into the `gpui-starter://` scheme so there is exactly one parser and
-    /// one set of rejected inputs (unknown hosts, traversal, control
-    /// characters, …).
+    /// Parse a `location.hash` fragment; empty fragments resolve to the
+    /// default route, the rest goes through [`parse_deep_link`](Self::parse_deep_link).
     pub fn from_hash(hash: &str) -> Result<Self, AppError> {
         let trimmed = hash.trim();
         let path = trimmed.strip_prefix('#').unwrap_or(trimmed);
@@ -171,20 +149,10 @@ impl AppRoute {
             validate_path_segment(segment)?;
         }
 
-        // --- 5. Query parameter sanitization --------------------------------
-        for (key, value) in url.query_pairs() {
-            let _key = sanitize_control_chars(&key);
-            let _value = sanitize_control_chars(&value);
-            // Sanitized values are currently unused but are validated here so
-            // that future consumers start from clean data. Control-character
-            // injection through query strings is prevented at the gate.
-        }
+        // Query parameters are ignored: matching consumes host + path only,
+        // so unsanitized query data can never reach dispatch.
 
-        // --- 6. Route matching ----------------------------------------------
-        // The host→Page mapping is delegated to `Page::from_host` so the
-        // parser, `to_url`, and `VALID_HOSTS` all share one source of truth.
-        // Only the sub-route `settings/notifications` needs a literal arm;
-        // its host is compared via `Page::Settings.host()` to avoid drift.
+        // --- 5. Route matching (host→Page via `Page::from_host`, one source of truth)
         match (host, segments.as_slice()) {
             (host, []) => match Page::from_host(host) {
                 Some(page) => Ok(Self::Page(page)),

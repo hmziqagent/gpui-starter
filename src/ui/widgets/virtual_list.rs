@@ -1,10 +1,5 @@
-//! Reusable virtualized-list widget wrapping `gpui_component::v_virtual_list`.
-//!
-//! This module provides helpers for building item-size vectors and computing
-//! bounded list heights, plus a single `render_virtual_list` entry point that
-//! encapsulates the common plumbing: entity clone, VirtualList construction,
-//! scroll-handle tracking, gap, overflow-y-scroll container, and optional
-//! scrollbar.
+//! Virtualized-list helpers around `gpui_component::v_virtual_list`: item-size
+//! builders, bounded heights, and a single wired-up render entry point.
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -17,16 +12,12 @@ use gpui_component::{VirtualListScrollHandle, v_flex, v_virtual_list};
 // Item-size helpers
 // ---------------------------------------------------------------------------
 
-/// Build uniform item sizes (all items the same height).
-///
-/// Width is `px(0.)` so that the flex layout inside each row controls width.
+/// Uniform item sizes; width is `px(0.)` so each row's flex layout controls it.
 pub fn uniform_item_sizes(count: usize, height: Pixels) -> Rc<Vec<Size<Pixels>>> {
     Rc::new(vec![size(px(0.), height); count])
 }
 
-/// Build variable item sizes from a slice of heights.
-///
-/// Width is `px(0.)` so that the flex layout inside each row controls width.
+/// Variable item sizes from heights; width is `px(0.)` as above.
 pub fn variable_item_sizes(heights: &[Pixels]) -> Rc<Vec<Size<Pixels>>> {
     Rc::new(heights.iter().map(|&h| size(px(0.), h)).collect())
 }
@@ -35,9 +26,7 @@ pub fn variable_item_sizes(heights: &[Pixels]) -> Rc<Vec<Size<Pixels>>> {
 // Bounded list height
 // ---------------------------------------------------------------------------
 
-/// Compute the bounded list height: `min(total_content_height + gaps, max_height)`.
-///
-/// `gap` is the inter-item gap applied between every pair of consecutive items.
+/// Bounded list height: `min(total_content_height + gaps, max_height)`.
 pub fn bounded_list_height(item_sizes: &[Size<Pixels>], gap: Pixels, max_height: Pixels) -> Pixels {
     let content_h: f32 = item_sizes.iter().map(|s| s.height.as_f32()).sum();
     let gap_total = gap.as_f32() * item_sizes.len().saturating_sub(1) as f32;
@@ -48,25 +37,8 @@ pub fn bounded_list_height(item_sizes: &[Size<Pixels>], gap: Pixels, max_height:
 // render_virtual_list
 // ---------------------------------------------------------------------------
 
-/// Render a virtualized list with all common wiring.
-///
-/// - `cx`: the view context (used for `cx.entity().clone()`).
-/// - `id`: element id for the virtual list.
-/// - `item_sizes`: pre-computed sizes for every item.
-/// - `list_height`: the container height (e.g. from `bounded_list_height` or a fixed value).
-/// - `gap`: inter-item gap; pass `px(0.)` for no gap.
-/// - `scroll_handle`: a cloned `VirtualListScrollHandle` (clone from the view field *before*
-///   calling this during render).
-/// - `show_scrollbar`: whether to attach a vertical scrollbar.
-/// - `render_items`: closure `Fn(&mut V, Range<usize>, &mut Window, &mut Context<V>) -> Vec<R>`
-///   that renders the items in the given visible range.
-///
-/// ## Constraints
-///
-/// - `VirtualListScrollHandle` must be cloned from the view field **before** calling this
-///   function during render.
-/// - Never read entity state via `entity.read(cx)` during render.
-/// - Items **must** be pinned to exact declared heights or rows will overlap/gap.
+/// Render a virtualized list (entity clone, scroll tracking, gap, container,
+/// optional scrollbar). Precondition: items pinned to declared heights.
 pub fn render_virtual_list<R, V>(
     cx: &mut Context<V>,
     id: impl Into<ElementId>,

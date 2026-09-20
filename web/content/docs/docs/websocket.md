@@ -9,16 +9,15 @@ For the broader network layer, see [Architecture](/docs/architecture/). For asyn
 
 ## Enabling the feature
 
-The client depends on `tokio-tungstenite` with native TLS. Both are optional, gated behind the `websocket` feature flag. Add to `Cargo.toml`:
+The client depends on `tokio-tungstenite` with native TLS. It is optional, gated behind the `websocket` feature flag. Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
 tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
-tokio-stream = { version = "0.1", optional = true }
 futures-util = "0.3"
 
 [features]
-websocket = ["dep:tokio-tungstenite", "dep:tokio-stream"]
+websocket = ["dep:tokio-tungstenite"]
 ```
 
 Then build with the feature enabled:
@@ -129,19 +128,7 @@ This sends a close frame, sets state to `Closed`, and clears the pending buffer.
 
 ## GPUI integration
 
-The module provides `spawn_connect` for wiring into GPUI's async system:
-
-```rust
-use crate::websocket;
-
-// During app init or in response to a user action:
-let url = "wss://example.com/ws".to_string();
-websocket::spawn_connect(url, cx);
-```
-
-`spawn_connect` creates a `WebSocketClient`, wraps `connect_loop` in `cx.spawn`, and detaches the task. Logging is routed through the `gpui_starter::websocket` target.
-
-For more control (custom message handler, reconnect policy), spawn manually:
+There is no built-in spawner; create the client and run `connect_loop` yourself:
 
 ```rust
 use crate::websocket::{WebSocketClient, ReconnectPolicy};

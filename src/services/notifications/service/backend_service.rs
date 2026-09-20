@@ -31,9 +31,8 @@ pub struct NotificationRuntimeSnapshot {
     pub capabilities: NotificationCapabilities,
     pub last_backend_error: Option<SharedString>,
     pub degraded_reason: Option<SharedString>,
-    /// Advisory: the freedesktop capabilities the running daemon advertises
-    /// (e.g. `body-markup`, `actions`, `icon-static`), probed at startup. Treated
-    /// as advisory — servers may ignore hints they nominally advertise.
+    /// Advisory: freedesktop capabilities the daemon advertises, probed at
+    /// startup; servers may ignore hints they nominally advertise.
     pub daemon_capabilities: Option<SharedString>,
 }
 
@@ -78,9 +77,8 @@ impl NotificationService {
         Self::with_backends(primary, secondary, primary_error)
     }
 
-    /// Construct with explicit backends (primarily a test hook). `primary` is
-    /// tried first; `secondary` is the fallback reached on any primary `Err` or
-    /// panic.
+    /// Construct with explicit backends (primarily a test hook): `primary` is
+    /// tried first, `secondary` is the fallback on any primary `Err` or panic.
     pub(crate) fn with_backends(
         primary: Option<Arc<dyn NotificationBackend>>,
         secondary: Arc<dyn NotificationBackend>,
@@ -204,11 +202,8 @@ impl NotificationService {
 
         if let Some(primary) = &self.primary {
             tracing::debug!(target: LOG, backend = %primary.kind(), "attempting primary notification send");
-            // catch_unwind: a panic inside a backend (e.g. notify-rust's
-            // action-signal `.unwrap()` chain, reached only after a successful
-            // show) would otherwise abort the whole send task and bypass the
-            // secondary fallback. Convert a panic into a regular error so the
-            // fallback is always attempted.
+            // catch_unwind: a panicking backend must not abort the send task —
+            // the panic becomes a regular error so the fallback is attempted.
             match AssertUnwindSafe(primary.send(&request))
                 .catch_unwind()
                 .await
@@ -290,17 +285,11 @@ impl NotificationService {
     }
 }
 
-/// Select the preferred (primary) notification backend for this platform, or
-/// `None` to let the robust synchronous NotifyRustBackend be the active path
-/// (Linux native). `primary_error` records why a preferred backend was wanted
-/// but unavailable.
+/// Select the preferred (primary) notification backend, or `None` to let the
+/// synchronous NotifyRustBackend be the active path (Linux native).
 fn select_primary_backend() -> (Option<Arc<dyn NotificationBackend>>, Option<String>) {
-    // Wasm/browser: the Web Notifications API is the closest web equivalent
-    // of an OS notification daemon (desktop browsers show real OS banners
-    // without any service worker). Very old browsers without
-    // `window.Notification` get `None` here — the UiOnly stub secondary
-    // keeps the shape honest and every send degrades to the in-app toast +
-    // inbox policy.
+    // Wasm: the Web Notifications API is the closest daemon equivalent; very
+    // old browsers get `None` and every send degrades to the in-app policy.
     #[cfg(target_family = "wasm")]
     {
         match WebNotificationBackend::new() {
@@ -375,9 +364,7 @@ fn select_primary_backend() -> (Option<Arc<dyn NotificationBackend>>, Option<Str
     }
 
     // Linux native (or portal feature off): NotifyRust is the active backend.
-    // On macOS/Windows control always returned from the cfg block above, and
-    // on wasm the web backend block above is the whole function body — the
-    // tail is gated to exclude all three so it is never flagged unreachable.
+    // The cfg keeps the tail from being flagged unreachable on other targets.
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_family = "wasm")))]
     {
         (None, None)
@@ -546,10 +533,8 @@ mod tests {
         assert_eq!(result.backend_used, NotificationBackendKind::UiOnly);
     }
 
-    /// On Linux the user-notify (async/xdg) backend is intentionally skipped: it
-    /// offers nothing over the synchronous NotifyRustBackend and removes the
-    /// async-vs-sync ambiguity. `new()` must therefore leave `primary = None` and
-    /// report notify-rust as the active backend.
+    /// Linux skips the user-notify backend (nothing over notify-rust), so
+    /// `new()` must leave `primary = None` and report notify-rust as active.
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_selects_notify_rust_as_active_backend() {

@@ -6,54 +6,17 @@ use std::sync::Arc;
 
 use gpui::{App, BorrowAppContext as _, Global};
 use opentelemetry::global;
-use tracing_opentelemetry as _;
 
 use sink::{DisabledSink, LocalSink, RemoteSink};
 
-/// Default OTLP HTTP endpoint used when no explicit endpoint is provided.
-///
-/// Matches the standard OpenTelemetry Collector default for HTTP/Protobuf
-/// transport on port 4318.
+/// OpenTelemetry Collector default for HTTP/Protobuf transport (port 4318).
 const DEFAULT_OTLP_ENDPOINT: &str = "http://localhost:4318";
 
-/// Environment variable name for overriding the OTLP exporter endpoint.
-///
-/// Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector URL, e.g.
-/// `https://telemetry.example.com:4318`. When unset, [`DEFAULT_OTLP_ENDPOINT`]
-/// is used.
+/// Set `OTEL_EXPORTER_OTLP_ENDPOINT` to override [`DEFAULT_OTLP_ENDPOINT`].
 const ENV_OTLP_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
-/// Service name advertised to the OTLP collector in the telemetry resource.
 #[cfg(feature = "otlp")]
 const SERVICE_NAME: &str = "gpui-starter";
-
-// ---------------------------------------------------------------------------
-// OTLP exporter (feature-gated)
-// ---------------------------------------------------------------------------
-//
-// To enable real OTLP export, add the following to Cargo.toml and then pass
-// `--features otlp` (or set `default-features = true` below):
-//
-//     [features]
-//     otlp = ["dep:opentelemetry-otlp", "dep:opentelemetry_sdk"]
-//
-//     [dependencies]
-//     opentelemetry-otlp = { version = "0.17.0", optional = true, features = [
-//         "http-proto",         # HTTP/Protobuf transport (no gRPC/tonic needed)
-//         "reqwest-client",     # Use the existing reqwest dependency as HTTP client
-//     ] }
-//     opentelemetry_sdk = { version = "0.24.1", optional = true, features = [
-//         "rt-tokio",           # Tokio runtime for batch exporter
-//         "trace",              # Trace pipeline support
-//     ] }
-//
-// The versions above are pinned to match the opentelemetry 0.24.x line already
-// present in this crate. Upgrade in lockstep if you bump opentelemetry.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TelemetryMode {
@@ -106,20 +69,12 @@ pub trait TelemetrySink: Send + Sync {
     fn flush(&self) -> Result<(), TelemetryError>;
 }
 
-// ---------------------------------------------------------------------------
-// Internal state
-// ---------------------------------------------------------------------------
-
 #[derive(Clone)]
 struct TelemetryRuntime {
     sink: Arc<dyn TelemetrySink>,
 }
 
 impl Global for TelemetryRuntime {}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 pub fn initialize(cx: &mut App) {
     let snapshot = TelemetrySnapshot::default();
@@ -139,13 +94,8 @@ pub fn snapshot(cx: &App) -> TelemetrySnapshot {
 
 /// Set the telemetry mode, consent flag, and optional endpoint override.
 ///
-/// When `mode` is [`TelemetryMode::Remote`] and `consented` is `true`, the
-/// function resolves the OTLP endpoint (see [`resolve_otlp_endpoint`]),
-/// installs the tracer provider, and wires the [`RemoteSink`].
-///
-/// `endpoint` is optional. When `None`, the value of the
-/// `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable is used, falling back
-/// to the built-in default.
+/// Without `endpoint`, `OTEL_EXPORTER_OTLP_ENDPOINT` (or the built-in
+/// default) is used. Only `Remote` + consent installs the OTLP exporter.
 pub fn set_mode(mode: TelemetryMode, consented: bool, endpoint: Option<&str>, cx: &mut App) {
     let resolved = resolve_otlp_endpoint(endpoint);
     let endpoint_redacted = redact_endpoint(&resolved);
@@ -156,7 +106,10 @@ pub fn set_mode(mode: TelemetryMode, consented: bool, endpoint: Option<&str>, cx
             (TelemetryMode::Disabled, _) | (_, false) => (Arc::new(DisabledSink), None),
             (TelemetryMode::LocalOnly, true) => (Arc::new(LocalSink), None),
             (TelemetryMode::Remote, true) => {
-                let sink = RemoteSink::new(&resolved);
+                // install_batch spawns its batching task on the ambient tokio
+                // runtime; GPUI threads run outside any, so hand it the shared one.
+                let shared = crate::services::tokio_runtime::handle(cx);
+                let sink = RemoteSink::new(&resolved, shared.map(|rt| rt.handle().clone()));
                 let err = if sink.connected {
                     None
                 } else {
@@ -225,14 +178,8 @@ pub fn flush(cx: &mut App) {
     });
 }
 
-/// Flush pending telemetry and shut down the global tracer provider.
-///
-/// This is a **one-way** operation: after calling `shutdown` no further spans
-/// can be exported. Use [`flush`] instead when you only need to push pending
-/// spans to the collector without disabling telemetry.
-///
-/// Safe to call multiple times. Subsequent calls after the first are no-ops at
-/// the OpenTelemetry level.
+/// Flush pending telemetry and permanently shut down the global tracer
+/// provider. Safe to call repeatedly; later calls are no-ops.
 pub fn shutdown(cx: &mut App) {
     let state = snapshot(cx);
     tracing::debug!(
@@ -242,23 +189,12 @@ pub fn shutdown(cx: &mut App) {
         events_recorded = state.events_recorded,
         "telemetry shutdown requested"
     );
-    // Flush pending spans through the sink (uses force_flush, not shutdown).
     flush(cx);
-    // Now shut down the global tracer provider permanently. This is the only
-    // place where shutdown_tracer_provider() should be called.
+    // The only place shutdown_tracer_provider() may be called.
     global::shutdown_tracer_provider();
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/// Resolve the OTLP endpoint URL.
-///
-/// Precedence:
-/// 1. Explicit `endpoint` argument passed by the caller.
-/// 2. `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
-/// 3. [`DEFAULT_OTLP_ENDPOINT`] fallback (`http://localhost:4318`).
+/// Explicit endpoint wins, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then the default.
 fn resolve_otlp_endpoint(explicit: Option<&str>) -> String {
     if let Some(ep) = explicit
         && !ep.trim().is_empty()
@@ -308,6 +244,7 @@ fn set_capability(snapshot: &TelemetrySnapshot, cx: &mut App) {
     );
 }
 
+/// Host plus a trailing ellipsis — enough to identify the collector, never the path.
 fn redact_endpoint(endpoint: &str) -> Option<String> {
     let endpoint = endpoint.trim();
     if endpoint.is_empty() {

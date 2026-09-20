@@ -68,18 +68,37 @@ fn resolve_endpoint_ignores_empty_explicit() {
 
 #[test]
 fn resolve_endpoint_falls_back_to_default() {
-    // Clear the env var so the default is guaranteed.
-    // SAFETY: This test does not read the env var concurrently; the
-    // removal is scoped to this single-threaded test function.
+    // Single-threaded test process: no concurrent env reads during removal.
     unsafe { std::env::remove_var(ENV_OTLP_ENDPOINT) };
     let ep = resolve_otlp_endpoint(None);
     assert_eq!(ep, DEFAULT_OTLP_ENDPOINT);
 }
 
+// The tracing-only install path (always connected) only exists without `otlp`;
+// with the feature, installation needs a tokio runtime, covered by the test below.
+#[cfg(not(feature = "otlp"))]
 #[test]
 fn remote_sink_connected_without_feature() {
-    // Without the `otlp` feature, install_otlp_tracer is a no-op success,
-    // so connected should be true (tracing-only path).
-    let sink = RemoteSink::new("http://localhost:9999");
+    let sink = RemoteSink::new("http://localhost:9999", None);
     assert!(sink.connected);
+}
+
+#[cfg(feature = "otlp")]
+#[test]
+fn remote_sink_connects_with_tokio_runtime() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for test");
+    let sink = RemoteSink::new("http://localhost:9999", Some(rt.handle().clone()));
+    assert!(sink.connected);
+}
+
+#[cfg(feature = "otlp")]
+#[test]
+fn remote_sink_without_runtime_stays_disconnected() {
+    // Installing without a runtime handle used to panic (batch exporter needs
+    // a reactor); it must degrade to a disconnected sink instead.
+    let sink = RemoteSink::new("http://localhost:9999", None);
+    assert!(!sink.connected);
 }

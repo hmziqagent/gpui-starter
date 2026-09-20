@@ -1,56 +1,25 @@
-//! Combined asset source.
-//!
-//! Merges the bundled gpui-kit icon assets (`gpui_kit_assets::Assets`)
-//! with gpui-starter's own project assets (currently the shipped theme
-//! definitions under `themes/`). Project assets take precedence on lookup so
-//! an app-supplied file shadows a same-named component asset. This replaces
-//! the bare `with_assets(Assets)` call in `main.rs` so the binary carries
-//! both sets of resources.
+//! Combined asset source: gpui-kit icons plus this crate's embedded themes.
+//! Project assets win on lookup, shadowing same-named component assets.
 
 use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// Project-local embedded assets (theme JSON shipped under `themes/`).
-///
-/// The folder path is deliberately RELATIVE: without rust-embed's
-/// `interpolate-folder-path` feature, `$CARGO_MANIFEST_DIR/themes` is treated
-/// as a literal (nonexistent) path — which compiles in dev-native (runtime
-/// fs mode) but breaks every build that embeds at compile time (release
-/// native and wasm). A relative folder is resolved against the crate root by
-/// rust-embed and embeds correctly everywhere.
+/// Embedded theme JSON. The folder is deliberately relative: an absolute
+/// `$CARGO_MANIFEST_DIR` path breaks embed-at-compile-time builds.
 #[derive(rust_embed::RustEmbed)]
 #[folder = "themes"]
 struct ProjectAssets;
 
-/// Wasm-only embedded assets: fonts + the gpui-kit default icon set.
-///
-/// Two wasm gaps this closes:
-///
-/// 1. **Fonts** — the wasm text system is created WITHOUT system fonts
-///    (`CosmicTextSystem::new_without_system_fonts` — a browser tab cannot
-///    enumerate installed fonts), so it starts empty and the FIRST text
-///    layout would panic ("failed to resolve font ... or any of the
-///    fallbacks"). `assets/fonts/NotoSans-Regular.ttf` (SIL OFL, license
-///    alongside) is registered at boot via [`crate::app::init`]; its family
-///    name is in gpui's default fallback stack, so every unresolved family
-///    eventually lands on it.
-///
-/// 2. **Icons** — `gpui_kit_assets::Assets` on wasm is an on-demand CDN
-///    loader: every icon requested before its fetch resolves logs a console
-///    ERROR ("Wasm assets loading, will be available soon..."), and with no
-///    `{endpoint}/assets/icons/` deployment those fetches 404 forever. The
-///    native `Assets` unit struct embeds the 101-icon default set listed in
-///    gpui-kit-assets' `default-icons.txt`; embedding the SAME set here
-///    gives exact native parity, synchronously, with no CDN dependency.
+/// Wasm-only embedded assets (fonts, default icons): browser tabs have no
+/// system fonts and no icon CDN, so the icon set is embedded for parity.
 #[cfg(target_family = "wasm")]
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets"]
 struct WasmAssets;
 
 /// Bytes of every embedded font (wasm-only; see [`WasmAssets`]). Only real
-/// font files are returned — the folder also carries the OFL license text,
-/// which fontdb rejects with a "malformed font" error if fed to it.
+/// font files: the folder's OFL license text makes fontdb error out.
 #[cfg(target_family = "wasm")]
 pub fn embedded_font_bytes() -> Vec<Cow<'static, [u8]>> {
     WasmAssets::iter()
@@ -58,6 +27,22 @@ pub fn embedded_font_bytes() -> Vec<Cow<'static, [u8]>> {
             (path.ends_with(".ttf") || path.ends_with(".otf")) && path.starts_with("fonts/")
         })
         .filter_map(|path| WasmAssets::get(&path).map(|file| file.data))
+        .collect()
+}
+
+/// (file name, JSON) of every theme embedded from themes/. Release builds
+/// have no themes/ checkout on disk, so this is the bundle's theme source.
+pub fn embedded_themes() -> Vec<(SharedString, String)> {
+    ProjectAssets::iter()
+        .filter(|path| path.ends_with(".json"))
+        .filter_map(|path| {
+            ProjectAssets::get(&path).map(|file| {
+                (
+                    SharedString::from(path.into_owned()),
+                    String::from_utf8_lossy(&file.data).into_owned(),
+                )
+            })
+        })
         .collect()
 }
 
@@ -69,9 +54,7 @@ pub struct CombinedAssets {
 impl CombinedAssets {
     pub fn new() -> Self {
         Self {
-            // Native: RustEmbed unit struct (icons embedded in the binary).
-            // Wasm: gpui-kit-assets swaps to an on-demand CDN source (empty
-            // endpoint = relative to the served page).
+            // Native: unit struct (icons embedded). Wasm: on-demand CDN source.
             #[cfg(not(target_family = "wasm"))]
             component: gpui_kit_assets::Assets,
             #[cfg(target_family = "wasm")]
@@ -88,16 +71,16 @@ impl Default for CombinedAssets {
 
 impl AssetSource for CombinedAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if path.is_empty() {
+        // Debug rust-embed reads the live fs; reject traversal segments so no
+        // file outside the embedded folders can ever be served as an asset.
+        if path.is_empty() || path.split('/').any(|seg| seg == "..") {
             return Ok(None);
         }
         // Project assets take precedence.
         if let Some(file) = ProjectAssets::get(path) {
             return Ok(Some(file.data));
         }
-        // Wasm: embedded fonts + default icon set (see `WasmAssets`) —
-        // checked synchronously BEFORE the on-demand CDN fallback so icons
-        // resolve without a network round-trip.
+        // Wasm: embedded fonts + icons, checked before the CDN fallback.
         #[cfg(target_family = "wasm")]
         if let Some(file) = WasmAssets::get(path) {
             return Ok(Some(file.data));
@@ -107,6 +90,9 @@ impl AssetSource for CombinedAssets {
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        if path.split('/').any(|seg| seg == "..") {
+            return Ok(Vec::new());
+        }
         let mut entries: Vec<SharedString> = ProjectAssets::iter()
             .filter(|p| p.starts_with(path))
             .map(Into::into)

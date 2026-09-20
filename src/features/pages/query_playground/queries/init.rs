@@ -11,18 +11,8 @@ use super::super::{HttpFetchKind, PlaygroundPage, PlaygroundUser, QueryPlaygroun
 #[cfg(not(target_family = "wasm"))]
 use super::actions::run_http;
 
-// ---------------------------------------------------------------------------
-// Lazy init helpers — each sets up the entity on first call
-// ---------------------------------------------------------------------------
-
-/// Common skeleton shared by the standard `ensure_*` query factories:
-/// early-return when the target field is already populated, build the
-/// QueryOptions, call `use_query`, and assign the resulting `(entity, sub)`
-/// pair to the field. The fetcher closure receives a freshly cloned
-/// background executor as `$exec` so each query can await timers without
-/// holding a borrow on `cx`. Factories that don't fit this shape
-/// (`ensure_mutation`, `ensure_infinite`, `ensure_select`, `ensure_http_query`)
-/// stay hand-written below.
+/// Skeleton for the standard `ensure_*` factories: early-return when populated,
+/// then call `use_query`; `$exec` is a cloned background executor.
 macro_rules! ensure_query {
     (
         $self:ident . $field:ident,
@@ -156,10 +146,8 @@ impl QueryPlaygroundPage {
     }
 
     pub(super) fn ensure_retry_query(&mut self, cx: &mut Context<Self>) {
-        // Retry attempts don't change query status (it stays Loading), so the
-        // status-deduped QueryObserver won't re-render on each increment — the
-        // climbing count would be invisible. Attach a raw observer so the retry
-        // counter is visible during the retry loop.
+        // Retry attempts don't change query status (stays Loading), so the
+        // status-deduped observer hides the climbing retry count during the loop.
         ensure_query!(
             self.retry_query,
             cx,
@@ -272,25 +260,21 @@ impl QueryPlaygroundPage {
         );
     }
 
-    /// Real HTTP query (reqwest over the tokio runtime). Created lazily on the
-    /// first HTTP button click — never auto-fetched on page load. The initial
-    /// fetcher does GET JSON; `fetch_http` re-fetches with the chosen kind.
+    /// Real HTTP query (reqwest over the tokio runtime), created lazily on the
+    /// first HTTP click. Initial fetch is GET JSON; `fetch_http` re-fetches.
     pub(super) fn ensure_http_query(&mut self, cx: &mut Context<Self>) {
         if self.http_query.is_some() {
             return;
         }
-        // reqwest must run on tokio; clone the shared client + runtime out of the
-        // global (releasing the cx borrow) before entering the fetch closure.
+        // Clone the shared client + runtime out of the global before entering
+        // the fetch closure, releasing the cx borrow.
         let (client, runtime) = match crate::services::tokio_runtime::runtime_and_client(cx) {
             Some((runtime, client)) => (client, runtime),
             None => return, // fetch_http also guards and logs this
         };
 
-        // Wasm: reqwest futures are `!Send` but `use_query` demands `Fn +
-        // Send` fetchers — pre-spawn the single initial fetch on GPUI's local
-        // executor (see `spawn_http_local`) and let each fetcher call take the
-        // `Send` task handle. The query uses no-retry/latest-wins, so exactly
-        // one call is expected; a hypothetical re-call degrades to an error.
+        // Wasm: reqwest futures are `!Send` but `use_query` demands `Fn + Send`,
+        // so pre-spawn the single initial fetch via `spawn_http_local`.
         #[cfg(target_family = "wasm")]
         let http_task = std::sync::Arc::new(std::sync::Mutex::new(Some(
             super::actions::spawn_http_local(cx, &client, &runtime, HttpFetchKind::GetJson),
@@ -316,15 +300,15 @@ impl QueryPlaygroundPage {
                 }
                 #[cfg(target_family = "wasm")]
                 {
-                    // The fetcher is `Fn` (re-callable), so share the cell via
-                    // an Arc clone instead of moving it into the future.
+                    // The fetcher is `Fn` (re-callable), so share the cell via an
+                    // Arc clone instead of moving it into the future.
                     let http_task = http_task.clone();
                     async move {
                         if signal.is_cancelled() {
                             return Err(QueryError::cancelled("cancelled before send"));
                         }
-                        // Take the handle out before awaiting: the MutexGuard
-                        // is !Send and must not live across the await point.
+                        // Take the handle out before awaiting: MutexGuard is !Send
+                        // and must not live across the await point.
                         let task = http_task.lock().unwrap().take();
                         match task {
                             Some(task) => task.await,

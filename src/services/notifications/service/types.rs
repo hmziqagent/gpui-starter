@@ -5,8 +5,9 @@ use gpui::SharedString;
 pub const CATEGORY_ACTIONS: &str = "gpui-starter.actions";
 pub const CATEGORY_REPLY: &str = "gpui-starter.reply";
 
-// --- App identity (Linux desktop integration) --------------------------------
-// Three DISTINCT ids — do not conflate (see the Linux notifications audit):
+// App identity: three DISTINCT ids — display name, desktop-entry/bundle id,
+// X11 WM_CLASS (must equal .desktop StartupWMClass).
+
 /// Display name shown verbatim by the daemon (notify-rust `.appname`).
 pub const APP_DISPLAY_NAME: &str = "GPUI Starter";
 /// Reverse-DNS desktop-entry id: the `.desktop` filename, notify-rust
@@ -21,10 +22,8 @@ pub enum NotificationBackendKind {
     NotifyRust,
     #[cfg(feature = "notifications-portal")]
     Portal,
-    /// Browser Web Notifications API. Compiled unconditionally so the enum
-    /// needs no `cfg` ripples through `Display`/`matches` arms — on native
-    /// builds the variant simply never occurs (the wasm-only
-    /// `WebNotificationBackend` is its sole producer).
+    /// Compiled unconditionally to avoid cfg ripples; on native builds the
+    /// variant never occurs (the wasm-only `WebNotificationBackend` produces it).
     Web,
     UiOnly,
 }
@@ -89,12 +88,8 @@ pub struct NotificationRequest {
     pub category: Option<String>,
     pub prefer_native: bool,
     pub importance: NotificationImportance,
-    /// Force the in-app feedback toast to fire even when the native backend
-    /// reports success. A successful D-Bus `Notify` only means the daemon
-    /// *accepted* the notification — never that the user *saw* a banner (GNOME
-    /// suppresses banners under Do-Not-Disturb / per-app mute / busy /
-    /// fullscreen and still returns `Ok`). Set for explicit "send a test
-    /// notification" affordances so the button can never look dead.
+    /// Force the in-app feedback toast even on native success: a D-Bus `Ok`
+    /// only means accepted — GNOME suppresses banners under DND/mute/fullscreen.
     pub force_in_app_feedback: bool,
 }
 
@@ -112,13 +107,8 @@ impl NotificationRequest {
         }
     }
 
-    /// A user-initiated "send a test notification" affordance.
-    ///
-    /// Uses [`NotificationImportance::BackgroundWorthy`] so the native backend
-    /// maps it to `Critical` urgency — the only urgency that pierces GNOME's
-    /// Do-Not-Disturb, per-app banner mute, busy, and fullscreen gates — and
-    /// forces in-app feedback, so the user always gets a visible response even
-    /// when the banner is silently suppressed.
+    /// A user-initiated "send a test notification": `Critical` urgency (the
+    /// only level piercing GNOME's DND/mute/fullscreen gates) + forced feedback.
     pub fn test_notification(
         title: impl Into<SharedString>,
         body: impl Into<SharedString>,
@@ -167,12 +157,8 @@ pub struct NotificationCapabilities {
 pub struct NotificationSendResult {
     pub backend_used: NotificationBackendKind,
     pub degraded: bool,
-    /// True iff the native backend's send call returned `Ok` (e.g. the
-    /// FreeDesktop `Notify` D-Bus call succeeded). **Not** proof the user saw
-    /// a banner: GNOME/FreeDesktop returns `Ok` even when the banner is
-    /// suppressed by Do-Not-Disturb, per-app mute, busy, or fullscreen, and the
-    /// spec provides no display-confirmation signal. Treat as "accepted by
-    /// the daemon", not "delivered to the user".
+    /// True iff the backend's send returned `Ok` — "accepted by the daemon",
+    /// not proof the user saw a banner (FreeDesktop suppresses silently).
     pub delivered_natively: bool,
     pub error_summary: Option<SharedString>,
     pub importance: NotificationImportance,

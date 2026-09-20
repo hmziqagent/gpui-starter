@@ -1,27 +1,5 @@
 //! Wasm notification backend: the browser Web Notifications API behind the
-//! shared [`NotificationBackend`] trait.
-//!
-//! Desktop browsers render `new Notification(...)` as a real OS notification
-//! with no service worker involved — the API surface used here is exactly
-//! `Notification.permission` / `requestPermission()` / the constructor.
-//! (The installed-PWA story — iOS banner permissions, push — additionally
-//! rides on the harness manifest + service worker; real PushManager
-//! subscriptions are out of scope, there is no server.)
-//!
-//! Degrade paths, all explicit:
-//! - Browsers without `window.Notification` (very old): [`new`] returns
-//!   `Err` and the service keeps the failing [`WasmStubBackend`] secondary —
-//!   every send falls through to the in-app toast + inbox policy.
-//! - Permission not granted: `send` fails fast with a readable reason
-//!   instead of the constructor's bare `TypeError: Illegal constructor`.
-//! - `requestPermission` promise rejection: mapped to
-//!   [`NotificationPermissionState::Unavailable`] with the JS error message.
-//!
-//! Send-future note: the trait's `#[async_trait]` futures must be `Send`, so
-//! no `JsValue` (including a pending promise handle) may be held across an
-//! await point. All JS interop therefore stays inside synchronous helpers
-//! and crosses the await boundary only through a `flume` channel of plain
-//! `String`s.
+//! shared [`NotificationBackend`] trait (Send-safe via `flume` of `String`s).
 
 use async_trait::async_trait;
 use js_sys::Reflect;
@@ -35,18 +13,15 @@ use crate::notifications::{
 
 const LOG: &str = "gpui_starter::notifications::web";
 
-/// Notification icon shown in the OS banner. Served by the wasm harness
-/// (PWA icon); if the file is missing the browser silently falls back to
-/// its default icon — never an error.
+/// Notification icon served by the wasm harness; if the file is missing the
+/// browser silently falls back to its default icon — never an error.
 const NOTIFICATION_ICON_URL: &str = "/icons/icon-192.png";
 
 pub struct WebNotificationBackend;
 
 impl WebNotificationBackend {
-    /// Construct after probing that the browser actually exposes the API.
-    ///
-    /// `Err(reason)` is recorded by the service as its degrade reason — very
-    /// old browsers land there and fall back to the stub secondary.
+    /// Construct after probing that the browser exposes the API; `Err(reason)`
+    /// becomes the service's degrade reason (very old browsers land here).
     pub fn new() -> Result<Self, String> {
         if notification_constructor().is_some() {
             tracing::info!(target: LOG, "Web Notification API available");
@@ -67,10 +42,8 @@ impl NotificationBackend for WebNotificationBackend {
     }
 
     fn capabilities(&self) -> NotificationCapabilities {
-        // The Web API surface: permission is readable AND requestable, and a
-        // granted `new Notification()` is shown by the OS. Interactive
-        // buttons (`actions`) are Chrome-desktop-only and real background
-        // push needs a service worker + server — neither is advertised.
+        // Permission is readable/requestable and a granted constructor shows an
+        // OS banner; interactive actions and real push are not advertised.
         NotificationCapabilities {
             can_request_permission: true,
             can_read_permission_state: true,
@@ -100,9 +73,8 @@ impl NotificationBackend for WebNotificationBackend {
             Ok(Err(err)) => {
                 NotificationPermissionState::Unavailable(format!("requestPermission: {err}"))
             }
-            // Unreachable in practice: the leaked closures keep a sender
-            // alive for the page lifetime, so the channel never disconnects.
-            // Mapped defensively instead of panicking on a flume quirk.
+            // Unreachable in practice: the leaked senders keep the channel
+            // alive for the page lifetime; mapped defensively anyway.
             Err(_) => NotificationPermissionState::Unknown,
         }
     }
@@ -111,9 +83,8 @@ impl NotificationBackend for WebNotificationBackend {
         if notification_constructor().is_none() {
             anyhow::bail!("Web Notification API unavailable (window.Notification undefined)");
         }
-        // Fail fast with a readable reason when unauthorized — constructing a
-        // Notification without permission throws a bare TypeError whose
-        // message ("Illegal constructor") explains nothing to the user.
+        // Fail fast when unauthorized: constructing a Notification without
+        // permission throws a bare TypeError that explains nothing.
         let permission = permission_string()
             .ok_or_else(|| anyhow::anyhow!("web notification permission could not be read"))?;
         if permission != "granted" {
@@ -130,9 +101,8 @@ impl NotificationBackend for WebNotificationBackend {
         if let Some(tag) = web_tag_for_request(request) {
             web_sys::NotificationOptions::set_tag(&options, &tag);
         }
-        // Browsers play their default sound unless `silent` is set — map the
-        // request's explicit sound opt-out onto it (forcing a custom sound is
-        // not possible on the web).
+        // Browsers play their default sound unless `silent` is set; forcing a
+        // custom sound is not possible on the web.
         if !request.play_sound {
             web_sys::NotificationOptions::set_silent(&options, Some(true));
         }
@@ -153,12 +123,8 @@ impl NotificationBackend for WebNotificationBackend {
     }
 }
 
-/// The global `Notification` constructor, or `None` on browsers without the
-/// API (also covers a missing `window`, e.g. non-browser embeddings).
-///
-/// `Reflect::get` on the window keeps this a pure existence probe — calling
-/// any web-sys `Notification` static would throw a `ReferenceError` through
-/// the generated shim on such browsers.
+/// The global `Notification` constructor, or `None` without the API (also
+/// covers a missing `window`). `Reflect::get` keeps this a pure existence probe.
 fn notification_constructor() -> Option<JsValue> {
     let window = web_sys::window()?;
     let constructor =
@@ -170,12 +136,8 @@ fn notification_constructor() -> Option<JsValue> {
     }
 }
 
-/// Read `Notification.permission` (`"granted" | "denied" | "default"`).
-///
-/// web-sys 0.3.102's typed `Notification::permission()` is gated behind the
-/// `NotificationPermission` feature, which is not in the crate's enabled
-/// web-sys feature union — `Reflect::get` on the constructor reads the same
-/// property with zero extra features.
+/// Read `Notification.permission` via `Reflect::get` — the typed getter is
+/// gated behind a web-sys feature not in this crate's enabled union.
 fn permission_string() -> Option<String> {
     let constructor = notification_constructor()?;
     Reflect::get(&constructor, &JsValue::from_str("permission"))
@@ -183,17 +145,8 @@ fn permission_string() -> Option<String> {
         .and_then(|value| value.as_string())
 }
 
-/// Kick off `Notification.requestPermission()` and return the channel its
-/// resolution lands on; `None` when the API is unavailable or the call
-/// itself threw.
-///
-/// The Promise is bridged with two `Closure`s + `then2` (fulfilled/rejected)
-/// instead of `wasm-bindgen-futures` (not a dependency of this crate): all
-/// JS handles stay inside this synchronous helper so the awaiting future
-/// only ever holds the `Send` `flume::Receiver` (see the module docs). The
-/// closures are intentionally leaked (house pattern) — they must outlive
-/// this frame until the promise settles; the leaked senders also keep the
-/// channel alive so the receiver never observes a disconnect.
+/// Kick off `Notification.requestPermission()`, returning the channel its
+/// resolution lands on; `None` when the API is unavailable or the call threw.
 fn spawn_permission_request() -> Option<flume::Receiver<Result<String, String>>> {
     notification_constructor()?;
     let promise = match web_sys::Notification::request_permission() {
@@ -217,6 +170,8 @@ fn spawn_permission_request() -> Option<flume::Receiver<Result<String, String>>>
         let _ = tx.send(Err(js_value_message(&err)));
     });
     let _ = promise.then2(&on_resolve, &on_reject);
+    // Leaked (house pattern) to outlive the frame; the leaked senders also
+    // keep the channel alive so the receiver never sees a disconnect.
     on_resolve.forget();
     on_reject.forget();
     Some(rx)

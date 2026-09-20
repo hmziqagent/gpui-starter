@@ -11,11 +11,7 @@ use super::{ChatStreamSource, ChatTurn, Role};
 const STREAMING_CURSOR: char = '\u{258C}';
 
 /// View holding a chat transcript and driving a streaming assistant reply.
-///
-/// This owns the chat-turn model ([`Vec<ChatTurn>`]) plus streaming/error state.
-/// It is deliberately backend-agnostic: tokens arrive via [`Self::append_token`]
-/// and the caller is free to feed them from
-/// [`crate::services::streaming::spawn_token_stream`] or any other source.
+/// Backend-agnostic: tokens arrive via [`Self::append_token`].
 #[derive(Clone)]
 pub struct AiResponseView {
     turns: Vec<ChatTurn>,
@@ -109,13 +105,8 @@ impl AiResponseView {
 }
 
 impl AiResponseView {
-    /// Render the full transcript (or the error banner) as a GPUI element tree.
-    ///
-    /// User turns render as right-aligned bubbles; assistant turns render as
-    /// markdown (via `gpui_component::text::markdown`) — except while the
-    /// assistant has produced no text yet, in which case a "Thinking…"
-    /// placeholder is shown. A streaming assistant turn gets a trailing
-    /// `STREAMING_CURSOR`.
+    /// Render the transcript (or the error banner): user bubbles, assistant
+    /// markdown, a "Thinking…" placeholder, and a cursor while streaming.
     pub fn render(&self, _window: &mut Window, cx: &mut App) -> Div {
         let theme = cx.theme();
         let accent = theme.accent;
@@ -255,29 +246,12 @@ fn render_assistant_message(
         } else {
             content.to_string()
         };
-        // gpui-component's markdown() returns a TextView implementing IntoElement.
-        // If markdown rendering is unavailable in a given build, fall back to
-        // plain text by treating the same string as a SharedString.
         wrapper.child(markdown(SharedString::from(display)))
     }
 }
 
-/// Kick off a streaming assistant reply for the current transcript and return a
-/// poller [`Task`] that keeps the view updated. Driving the stream happens on
-/// the shared tokio runtime via [`crate::services::streaming::spawn_token_stream`].
-///
-/// `E` is the entity that owns the [`AiResponseView`] (e.g. the page). `apply`
-/// bridges a token into a mutation on that entity — typically by updating the
-/// embedded `AiResponseView` with [`AiResponseView::append_token`]. The caller
-/// is responsible for calling [`AiResponseView::finish_streaming`] /
-/// [`AiResponseView::set_error`] when the stream ends (the receiver close is
-/// observable as the poller's final `cx.notify()`; see
-/// [`crate::services::streaming::spawn_token_poller`]).
-///
-/// The returned [`Task`] is the canonical cancellation handle: replace it with
-/// `Task::ready(())` to cancel. The producer is detached so it runs to
-/// completion independent of the poller; cancelling the poller drops the
-/// receiver, which the producer detects and exits.
+/// Kick off a streaming assistant reply; the returned poller [`Task`] is the
+/// cancellation handle. Call `finish_streaming` / `set_error` at stream end.
 pub fn start_stream<E, S, F>(
     view: &AiResponseView,
     weak: WeakEntity<E>,
@@ -298,7 +272,8 @@ where
 
     let poller = crate::services::streaming::spawn_token_poller(rx, weak, cx, apply);
 
-    // Keep the producer alive for the lifetime of the poller by detaching it.
+    // The producer runs on its own; cancelling the poller drops the receiver,
+    // which is what makes the producer exit.
     producer.detach();
 
     Some(poller)
