@@ -1,13 +1,5 @@
-//! Wasm connectivity bridge: `navigator.onLine` + online/offline events.
-//!
-//! Replaces the "assume online" stub in [`crate::services::connectivity`].
-//! The browser's reachability signal is exactly this (no interface
-//! enumeration exists on the web platform — `snapshot.interfaces` stays
-//! empty), and the online/offline events let the snapshot track the network
-//! without any user action re-running `check_now`.
-//!
-//! Listener closures are leaked for the page lifetime (house pattern, same
-//! as the router listeners and the `ApplicationHandle` leak in `src/web.rs`).
+//! Wasm connectivity bridge: `navigator.onLine` + online/offline events feed
+//! the [`ConnectivitySnapshot`] global via the dispatch queue.
 
 use gpui::BorrowAppContext as _;
 use wasm_bindgen::{JsCast as _, JsValue, prelude::Closure};
@@ -16,18 +8,16 @@ use crate::connectivity::{ConnectivitySnapshot, ConnectivityState};
 
 const LOG: &str = "gpui_starter::web::connectivity";
 
-/// Current `navigator.onLine` (defaults to `false` when the API is somehow
-/// missing — a missing signal must not read as connectivity).
+/// Current `navigator.onLine`; `false` when the API is missing, since a
+/// missing signal must not read as connectivity.
 pub fn navigator_online() -> bool {
     web_sys::window()
         .map(|window| window.navigator().on_line())
         .unwrap_or(false)
 }
 
-/// Install the `online`/`offline` window listeners (called from
-/// [`super::install`]). Every event re-reads `navigator.onLine` and writes
-/// the snapshot global through the dispatch queue — the browser fires these
-/// outside GPUI's update loop.
+/// Install the `online`/`offline` window listeners (from [`super::install`]);
+/// each event re-reads `navigator.onLine` and updates the snapshot global.
 pub fn install_listeners() {
     let Some(window) = web_sys::window() else {
         tracing::warn!(target: LOG, "no window; connectivity listeners not installed");

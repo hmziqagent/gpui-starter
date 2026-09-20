@@ -10,10 +10,6 @@ use gpui::AsyncApp;
 #[cfg(not(target_family = "wasm"))]
 use gpui::UpdateGlobal as _;
 
-// ---------------------------------------------------------------------------
-// Download update
-// ---------------------------------------------------------------------------
-
 pub fn download_update(cx: &mut App) {
     let current = super::snapshot(cx);
     let version = match &current.status {
@@ -28,9 +24,8 @@ pub fn download_update(cx: &mut App) {
         }
     };
 
-    // Wasm: downloads can never be Available (check_for_updates reports
-    // UpToDate on wasm), and there is no binary to swap — degrade to a no-op
-    // rather than touching the (undriven) tokio runtime.
+    // Wasm: updates are desktop-only (binary swap on disk); never be
+    // Available here, and never touch the (undriven) tokio runtime.
     #[cfg(target_family = "wasm")]
     {
         tracing::debug!(
@@ -48,20 +43,16 @@ pub fn download_update(cx: &mut App) {
     #[cfg(not(target_family = "wasm"))]
     let (rt, client) = crate::services::tokio_runtime::runtime_and_client(cx)
         .expect("tokio runtime global must be installed before downloading updates");
-    // P8: Reuse the asset cached by the most recent `check_for_updates` run
-    // so we can skip a second manifest fetch.
+    // Reuse the asset cached by the most recent check to skip a second
+    // manifest fetch.
     #[cfg(not(target_family = "wasm"))]
     let cached_asset = current.cached_asset.clone();
 
-    // A4: thin spawn wrapper that delegates to `run_download` and routes the
-    // recoverable error path to `handle_download_failure`. The actual
-    // download/verify logic lives in `run_download`, which is unit-testable.
     #[cfg(not(target_family = "wasm"))]
     cx.spawn(async move |cx| {
         match run_download(version, cached_asset, rt, client, cx).await {
             Ok(DownloadOutcome::Success { version, path }) => {
                 cx.update(|cx| {
-                    // Reset download retry count on success.
                     super::reset_download_retry(cx);
                     super::set_status(
                         UpdateStatus::Downloaded {
@@ -87,27 +78,16 @@ pub fn download_update(cx: &mut App) {
     .detach();
 }
 
-/// Outcome of a download attempt produced by [`run_download`].
-///
-/// `Err` represents a recoverable transport/IO failure that should be routed
-/// to `handle_download_failure` for retry/backoff. `PermanentFailure` covers
-/// signature/codesign mismatches that must not be retried. `Success` carries
-/// the downloaded file path for the wrapper to record.
+/// `Err` is a recoverable transport/IO failure routed to retry/backoff;
+/// `PermanentFailure` covers verification failures, which must never retry.
 #[cfg(not(target_family = "wasm"))]
 enum DownloadOutcome {
     Success { version: String, path: String },
     PermanentFailure(String),
 }
 
-/// Inner body of [`download_update`], extracted for testability.
-///
-/// Pipeline: resolve asset (cached or freshly fetched) → streaming download
-/// with progress → Ed25519 verify on the background executor → codesign verify
-/// (macOS). All progress updates flow through `cx` so the UI stays reactive.
-///
-/// Recoverable failures are returned as `Err` so the caller can apply retry
-/// backoff via `handle_download_failure`; verification failures are returned
-/// as `Ok(PermanentFailure(..))` to suppress retry.
+/// Resolve asset → streaming download → Ed25519 verify → codesign (macOS).
+/// Verification failures come back as `Ok(PermanentFailure)` to suppress retry.
 #[cfg(not(target_family = "wasm"))]
 async fn run_download(
     version: String,
@@ -116,12 +96,20 @@ async fn run_download(
     client: reqwest::Client,
     cx: &AsyncApp,
 ) -> Result<DownloadOutcome, String> {
-    // Step 1: Resolve the platform asset, preferring the cached asset from
-    // `check_for_updates`.
     let asset = match cached_asset {
         Some(a) => a,
         None => match super::check::fetch_platform_asset(rt.clone(), client.clone()).await {
-            Ok(a) => a,
+            Ok(a) => {
+                // Cache the fresh asset so apply_update can find the verified
+                // signature for the swap marker.
+                let fetched = a.clone();
+                cx.update(|cx| {
+                    UpdateSnapshot::update_global(cx, |snap, _cx| {
+                        snap.cached_asset = Some(fetched);
+                    });
+                });
+                a
+            }
             Err(err) => {
                 tracing::error!(
                     target: "gpui_starter::updater",
@@ -133,19 +121,22 @@ async fn run_download(
         },
     };
 
-    // Step 2: Download the asset to a temp directory with streaming progress.
-    let tmp_dir = std::env::temp_dir().join("gpui-starter-updates");
-    if let Err(err) = std::fs::create_dir_all(&tmp_dir) {
-        return Err(format!("failed to create temp dir: {err}"));
+    // Download into the app-owned updates dir; a shared $TMPDIR would let a
+    // pre-created symlink redirect this write of unverified bytes.
+    let Some(dest_dir) = updates_dir() else {
+        return Err("no app updates directory available".to_string());
     };
 
-    let file_name = asset
-        .url
-        .rsplit('/')
-        .next()
-        .unwrap_or("update.bin")
-        .to_string();
-    let dest_path = tmp_dir.join(&file_name);
+    // The file name comes from the manifest-controlled URL; pin it to a plain
+    // last segment so it can never point outside the updates dir.
+    let raw_name = asset.url.rsplit('/').next().unwrap_or("");
+    let file_name =
+        if raw_name.is_empty() || raw_name == "." || raw_name == ".." || raw_name.contains('\\') {
+            "update.bin"
+        } else {
+            raw_name
+        };
+    let dest_path = dest_dir.join(file_name);
     let signature = asset.signature.clone();
 
     tracing::info!(
@@ -187,13 +178,11 @@ async fn run_download(
         Err(err) => return Err(format!("failed to create download file: {err}")),
     };
 
-    // Shared progress value updated by the download task.
     let progress = Arc::new(AtomicU32::new(0));
-
     let total_for_task = total;
     let progress_clone = progress.clone();
 
-    // Spawn the streaming download as a self-contained 'static task.
+    // Self-contained 'static task so it can run entirely on the tokio runtime.
     let download_handle = rt.spawn(async move {
         use futures_util::StreamExt as _;
         use std::io::Write as _;
@@ -234,7 +223,8 @@ async fn run_download(
         }
     });
 
-    // Poll the shared progress and push updates into GPUI state.
+    // Poll progress and push 10%-step updates into GPUI state; the GPUI
+    // background-executor timer avoids a fresh tokio task per tick.
     let mut last_progress: u32 = 0;
     loop {
         let cur = progress.load(Ordering::Relaxed);
@@ -245,20 +235,15 @@ async fn run_download(
             });
         }
 
-        // Check if the download finished — try a non-blocking poll.
         if download_handle.is_finished() {
             break;
         }
 
-        // P4: GPUI background-executor timer instead of spawning a fresh tokio
-        // task purely to sleep — avoids a per-tick task allocation. This is
-        // the same idiom used in `services/tasks.rs` and `desktop_shell/tray.rs`.
         cx.background_executor()
             .timer(std::time::Duration::from_millis(200))
             .await;
     }
 
-    // Flush final progress.
     let cur = progress.load(Ordering::Relaxed);
     if cur != last_progress {
         cx.update(|cx| {
@@ -284,65 +269,64 @@ async fn run_download(
         "download complete"
     );
 
-    // Step 3: Verify Ed25519 signature (if present in manifest).
-    if !signature.is_empty() {
-        // P1: the file read + SHA-256 + Ed25519 verify (which can take
-        // multiple seconds on a 50–150 MB binary) runs on the background
-        // executor so the UI thread is not blocked. The sync helper itself
-        // is unchanged; only the dispatch moves off the foreground thread.
-        let dest_for_verify = dest_path.clone();
-        let verify_result = cx
-            .background_executor()
-            .spawn(async move { verify_ed25519_signature(&dest_for_verify, &signature) })
-            .await;
-        match verify_result {
-            Ok(()) => {
-                tracing::info!(
-                    target: "gpui_starter::updater",
-                    path = %path_str,
-                    "Ed25519 signature verification passed"
-                );
-            }
-            Err(err) => {
-                tracing::error!(
-                    target: "gpui_starter::updater",
-                    path = %path_str,
-                    error = %err,
-                    "Ed25519 signature verification failed — deleting download"
-                );
-                let _ = std::fs::remove_file(&dest_path);
-                return Ok(DownloadOutcome::PermanentFailure(err));
-            }
-        }
-    } else {
-        tracing::warn!(
+    // Fail closed: a manifest that omits the signature must never install,
+    // or any manifest tamper could ship an arbitrary binary.
+    if signature.is_empty() {
+        tracing::error!(
             target: "gpui_starter::updater",
             path = %path_str,
-            "no signature in manifest — skipping Ed25519 verification (backward compat)"
+            "manifest asset has no signature — refusing to install unverified download"
         );
+        let _ = std::fs::remove_file(&dest_path);
+        return Ok(DownloadOutcome::PermanentFailure(
+            "manifest asset has no signature".to_string(),
+        ));
     }
 
-    // Step 4: Verify codesign on macOS.
+    // Hash + Ed25519 verify can take seconds on a large binary — keep it off
+    // the foreground thread.
+    let dest_for_verify = dest_path.clone();
+    let verify_result = cx
+        .background_executor()
+        .spawn(async move { verify_ed25519_signature(&dest_for_verify, &signature) })
+        .await;
+    if let Err(err) = verify_result {
+        tracing::error!(
+            target: "gpui_starter::updater",
+            path = %path_str,
+            error = %err,
+            "Ed25519 signature verification failed — deleting download"
+        );
+        let _ = std::fs::remove_file(&dest_path);
+        return Ok(DownloadOutcome::PermanentFailure(err));
+    }
+    tracing::info!(
+        target: "gpui_starter::updater",
+        path = %path_str,
+        "Ed25519 signature verification passed"
+    );
+
     #[cfg(target_os = "macos")]
     {
-        match verify_codesign(&dest_path) {
-            Ok(()) => {
-                tracing::info!(
-                    target: "gpui_starter::updater",
-                    path = %path_str,
-                    "codesign verification passed"
-                );
-            }
-            Err(err) => {
-                tracing::error!(
-                    target: "gpui_starter::updater",
-                    path = %path_str,
-                    error = %err,
-                    "codesign verification failed"
-                );
-                return Ok(DownloadOutcome::PermanentFailure(err));
-            }
+        let dest_for_codesign = dest_path.clone();
+        let codesign_result = cx
+            .background_executor()
+            .spawn(async move { verify_codesign(&dest_for_codesign) })
+            .await;
+        if let Err(err) = codesign_result {
+            tracing::error!(
+                target: "gpui_starter::updater",
+                path = %path_str,
+                error = %err,
+                "codesign verification failed"
+            );
+            return Ok(DownloadOutcome::PermanentFailure(err));
         }
+        tracing::info!(
+            target: "gpui_starter::updater",
+            path = %path_str,
+            "codesign verification passed"
+        );
     }
 
     Ok(DownloadOutcome::Success {
@@ -351,16 +335,6 @@ async fn run_download(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers — retry/backoff for downloads
-// ---------------------------------------------------------------------------
-
-/// Handle a failed download with retry/backoff logic.
-///
-/// Delegates the shared retry machinery to `schedule_retry`, then sets the
-/// interim status: `Available` when a retry is pending (so the UI can
-/// re-attempt), or a terminal `Error` (plus notification) when retries are
-/// exhausted.
 #[cfg(not(target_family = "wasm"))]
 fn handle_download_failure(error: String, cx: &mut App) {
     let scheduled = super::check::schedule_retry(
@@ -370,7 +344,7 @@ fn handle_download_failure(error: String, cx: &mut App) {
         download_update,
     );
     if scheduled {
-        // Revert status back to Available so we can re-attempt.
+        // Back to Available so the UI can re-attempt.
         UpdateSnapshot::update_global(cx, |snap, _cx| {
             snap.status = UpdateStatus::Available {
                 version: String::new(),
@@ -388,56 +362,48 @@ fn handle_download_failure(error: String, cx: &mut App) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers — crypto
-// ---------------------------------------------------------------------------
-
-/// Verify the Ed25519 signature of the downloaded file.
-///
-/// The signature covers the SHA-256 hash of the file contents.
-/// The signature is base64-encoded in the manifest.
-///
-/// This helper is synchronous and intended to be dispatched on the background
-/// executor — see [`run_download`] Step 3.
+/// Verify the base64 Ed25519 `signature_b64` over the SHA-256 of the file at
+/// `file_path`. Synchronous; dispatch on a background executor for large files.
+/// Also used by `apply::check_pending_swap` to re-verify at swap time — the
+/// temp file sits in a shared dir between download and install.
 #[cfg(not(target_family = "wasm"))]
-fn verify_ed25519_signature(
+pub(super) fn verify_ed25519_signature(
     file_path: &std::path::Path,
     signature_b64: &str,
 ) -> Result<(), String> {
     use base64::Engine as _;
     use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
-    use sha2::{Digest, Sha256};
+    use sha2::Digest;
+    use std::io::Read as _;
 
-    // Decode the base64 signature.
     let sig_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64)
         .map_err(|e| format!("failed to decode base64 signature: {e}"))?;
-
-    if sig_bytes.len() != 64 {
-        return Err(format!(
-            "invalid signature length: expected 64 bytes, got {}",
-            sig_bytes.len()
-        ));
-    }
-
     let sig_len = sig_bytes.len();
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| format!("invalid signature length: expected 64 bytes, got {sig_len}"))?;
     let signature = Signature::from_bytes(&sig_array);
 
-    // Build the verifying key from the hardcoded public key.
     let pubkey_bytes: [u8; 32] = *UPDATER_PUBLIC_KEY;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_bytes)
         .map_err(|e| format!("invalid updater public key: {e}"))?;
 
-    // Read the file and compute SHA-256.
-    let file_data = std::fs::read(file_path)
-        .map_err(|e| format!("failed to read downloaded file for signature check: {e}"))?;
+    let mut file = std::fs::File::open(file_path)
+        .map_err(|e| format!("failed to open downloaded file for signature check: {e}"))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("failed to read downloaded file for signature check: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let hash = hasher.finalize();
 
-    let hash = Sha256::digest(&file_data);
-
-    // Verify the signature against the hash.
     verifying_key
         .verify(&hash, &signature)
         .map_err(|e| format!("Ed25519 signature verification failed: {e}"))?;

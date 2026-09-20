@@ -33,7 +33,6 @@ impl QueryPlaygroundPage {
         let muted = theme.muted;
         let radius_lg = theme.radius_lg;
         let danger = theme.danger;
-        let _ = theme;
 
         section_card(
             "HTTP Fetching",

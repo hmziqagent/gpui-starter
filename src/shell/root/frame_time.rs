@@ -13,17 +13,12 @@ pub(crate) fn store_frame_time(elapsed_us: u64) {
     LAST_FRAME_TIME_US.store(elapsed_us, Ordering::Relaxed);
 }
 
-/// Returns the most recent frame render time in microseconds.
-///
-/// Used by the status bar to display a dev-only frame-time readout.
+/// Most recent frame render time, for the status-bar dev readout.
 pub fn last_frame_time_us() -> u64 {
     LAST_FRAME_TIME_US.load(Ordering::Relaxed)
 }
 
-/// Returns the slow-frame threshold in microseconds.
-///
-/// Exposed so the status bar can colour-code the readout relative to the
-/// threshold.
+/// Slow-frame threshold, for colour-coding the status-bar readout.
 pub fn slow_frame_threshold_us() -> u64 {
     SLOW_FRAME_THRESHOLD_US
 }

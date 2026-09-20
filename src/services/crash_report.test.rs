@@ -94,3 +94,36 @@ fn detect_pending_sorts_newest_first() {
     assert_eq!(detected[0].panic_message, "second");
     assert_eq!(detected[1].panic_message, "first");
 }
+
+#[test]
+fn new_scrubs_home_dir_from_reported_text() {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let report = CrashReport::new(
+        format!("panicked at {home}/src/main.rs"),
+        format!("frame 0: {home}/src/lib.rs"),
+        false,
+        vec![format!("error reading {home}/secret.txt")],
+    );
+    if home.is_empty() {
+        return; // nothing to scrub without a home dir
+    }
+    assert!(!report.panic_message.contains(&home));
+    assert!(!report.backtrace.contains(&home));
+    assert!(!report.recent_errors[0].contains(&home));
+    assert!(report.panic_message.contains("~/src/main.rs"));
+}
+
+#[test]
+fn new_caps_report_sizes() {
+    let long_error = "x".repeat(10_000);
+    let many_errors: Vec<String> = (0..50)
+        .map(|i| format!("err{i}-{}", "y".repeat(600)))
+        .collect();
+    let report = CrashReport::new(long_error.clone(), long_error, false, many_errors);
+    assert_eq!(report.panic_message.chars().count(), 2048);
+    assert_eq!(report.backtrace.chars().count(), 8192);
+    assert_eq!(report.recent_errors.len(), 20);
+    assert_eq!(report.recent_errors[0].chars().count(), 512);
+}

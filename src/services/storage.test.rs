@@ -115,19 +115,14 @@ fn load_pending_crash_reports_respects_limit() {
     assert_eq!(loaded.len(), 3);
 }
 
-/// Regression (judge area-D round 1): the async-trait refactor moved the
-/// boot health check into a spawned task, but the capability registry was
-/// only written from the synchronous boot snapshot — where `healthy` is
-/// still its default `false` — so every healthy native boot permanently
-/// reported `Capability:storage degraded=true`. The fix re-derives the
-/// capability inside the boot task once the health result lands. The full
-/// boot sequence needs a GPUI app context (gpui's `test-support` is not a
-/// dependency), so this replays the exact initialize sequence over the same
-/// helpers the boot path calls.
+/// Regression guard: the boot health check lands after the synchronous
+/// capability set, so every snapshot update must re-derive the status or a
+/// healthy native boot freezes in as `degraded: true`. The full boot needs a
+/// GPUI app context, so this replays the initialize sequence over the helpers.
 #[test]
 fn native_boot_capability_not_degraded_after_health_check_lands() {
     // What native `initialize` constructs after a successful `init_db`:
-    // available, schema recorded, but the async health check has not run.
+    // available, schema recorded, health check not yet run.
     let mut snapshot = StorageSnapshot {
         db_path: "/data/app.db".to_string(),
         available: true,
@@ -136,14 +131,9 @@ fn native_boot_capability_not_degraded_after_health_check_lands() {
         ..StorageSnapshot::default()
     };
 
-    // Provisional state, written synchronously by initialize: degraded,
-    // because `healthy` defaults to false — the state the bug froze into
-    // the registry.
     let provisional = capability_status(true, &snapshot);
     assert!(provisional.degraded);
 
-    // The boot task folds the health result into the snapshot, then
-    // re-derives the capability from the updated snapshot.
     record_health_result(&mut snapshot, Ok(()));
     let status = capability_status(true, &snapshot);
     assert!(status.supported);
@@ -152,7 +142,6 @@ fn native_boot_capability_not_degraded_after_health_check_lands() {
     assert_eq!(status.reason, None);
     assert_eq!(status.last_error, None);
 
-    // A failing health check keeps the degrade honest.
     record_health_result(
         &mut snapshot,
         Err(StorageError::Sqlite(rusqlite::Error::InvalidQuery)),

@@ -1,7 +1,7 @@
-#![allow(dead_code)]
-
 #[cfg(not(target_family = "wasm"))]
 use std::fs;
+#[cfg(not(target_family = "wasm"))]
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -92,14 +92,10 @@ static LAST_PANIC_SUMMARY: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 /// write crash report files without needing GPUI context.
 static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// Ring buffer of recent error messages, populated by
-/// [`track_recent_error`] so the panic handler can attach them to the
-/// crash report.
+/// Ring buffer of recent errors attached to the next crash report.
 static RECENT_ERRORS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
-/// Set the application data directory for use by the panic hook.
-///
-/// Must be called once during startup, after `app_state` is initialized.
+/// Point the panic hook at the app data dir; call once, after app_state init.
 pub fn set_app_data_dir(path: PathBuf) {
     let _ = APP_DATA_DIR.set(path);
 }
@@ -134,11 +130,8 @@ impl Drop for RenderPathGuard {
     }
 }
 
-/// Mark the current thread as being inside the render path.
-///
-/// Returns a guard that clears the flag on drop. Intended to wrap only the
-/// `active_page_view` call so that only render-originating panics trigger the
-/// error boundary.
+/// Mark the thread as inside the render path; only render-originating panics
+/// trigger the error boundary. The guard clears the flag on drop.
 pub fn enter_render_path() -> impl Drop {
     IN_RENDER_PATH.with(|c| c.set(true));
     RenderPathGuard
@@ -149,9 +142,7 @@ pub fn in_render_path() -> bool {
     IN_RENDER_PATH.with(|c| c.get())
 }
 
-/// Set to `true` inside the panic hook so the next render pass can detect
-/// that a panic occurred and swap in the error boundary view instead of the
-/// crashing page.
+/// Set by the panic hook; the next render swaps in the error boundary view.
 static RENDER_PANIC_OCCURRED: AtomicBool = AtomicBool::new(false);
 
 pub fn last_panic_summary() -> Option<String> {
@@ -160,10 +151,7 @@ pub fn last_panic_summary() -> Option<String> {
         .and_then(|slot| slot.lock().ok().and_then(|value| value.clone()))
 }
 
-/// Atomically read and reset the render-panic flag.
-///
-/// Returns `true` if a panic was captured since the last call, `false`
-/// otherwise.
+/// Read and reset the render-panic flag; `true` if a panic occurred.
 pub fn take_render_panic() -> bool {
     RENDER_PANIC_OCCURRED.swap(false, Ordering::SeqCst)
 }
@@ -179,11 +167,8 @@ pub fn install_panic_hook() {
 
         let is_render = in_render_path();
 
-        // Mark that a render panic occurred so the render loop can show the
-        // error boundary view on the next frame instead of re-trying the
-        // crashing page.  Only set the flag when the panic originates inside
-        // the render path to avoid false error-boundary activation from
-        // background tasks, init, etc.
+        // Only render-originating panics swap in the error boundary; other
+        // panics (background tasks, init) must not.
         if is_render {
             RENDER_PANIC_OCCURRED.store(true, Ordering::SeqCst);
         }
@@ -228,26 +213,38 @@ pub fn install_panic_hook() {
 // Crash marker (file-based crash detection)
 // ---------------------------------------------------------------------------
 
-// The crash marker trio is file-based crash detection. On wasm the whole
-// feature is native-only: `std::env::temp_dir()` (and every other
-// filesystem-path API) PANICS at runtime on wasm32-unknown-unknown
-// ("no filesystem on this platform"), and a browser tab has no persistent
-// temp dir or next-launch semantics anyway. The wasm no-ops below keep the
-// shared boot path (app::init) free of unsupported path APIs.
+// File-based crash detection is native-only: path APIs panic at runtime on
+// wasm and a browser tab has no next-launch semantics anyway.
 
+// Marker lives under the app data dir, never $TMPDIR (symlink planting); an
+// unset dir disables the feature.
 #[cfg(not(target_family = "wasm"))]
-fn crash_marker_path() -> PathBuf {
-    std::env::temp_dir().join("gpui-starter.crash-marker")
+fn crash_marker_path() -> Option<PathBuf> {
+    APP_DATA_DIR.get().map(|dir| dir.join("crash-marker"))
 }
 
-/// Write a crash marker file at startup. If the process crashes, this file
-/// will remain on disk so the next launch can detect it.
+/// Write a crash marker at startup, readable by the next launch.
 #[cfg(not(target_family = "wasm"))]
 pub fn write_crash_marker() {
-    let path = crash_marker_path();
+    let Some(path) = crash_marker_path() else {
+        return;
+    };
     let pid = std::process::id();
     let timestamp = chrono::Utc::now().to_rfc3339();
-    if let Err(err) = fs::write(&path, format!("pid={pid}\nstarted_at={timestamp}\n")) {
+    // Unlink first, then create_new 0600: a marker left by an older build or
+    // a symlink planted on the path is replaced, never written through.
+    let _ = fs::remove_file(&path);
+    let mut options = fs::File::options();
+    options.write(true).create_new(true);
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    if let Err(err) = options
+        .open(&path)
+        .and_then(|mut file| write!(file, "pid={pid}\nstarted_at={timestamp}\n"))
+    {
         tracing::warn!(
             target: "gpui_starter::lifecycle",
             path = %path.display(),
@@ -257,11 +254,10 @@ pub fn write_crash_marker() {
     }
 }
 
-/// Check whether a crash marker from a previous run exists. Returns `Some`
-/// with the marker contents if found, `None` otherwise.
+/// Return the previous run's marker contents, if any.
 #[cfg(not(target_family = "wasm"))]
 pub fn check_previous_crash() -> Option<String> {
-    let path = crash_marker_path();
+    let path = crash_marker_path()?;
     if path.exists() {
         match fs::read_to_string(&path) {
             Ok(contents) => Some(contents),
@@ -283,7 +279,9 @@ pub fn check_previous_crash() -> Option<String> {
 /// Remove the crash marker on a clean shutdown.
 #[cfg(not(target_family = "wasm"))]
 pub fn remove_crash_marker() {
-    let path = crash_marker_path();
+    let Some(path) = crash_marker_path() else {
+        return;
+    };
     if path.exists()
         && let Err(err) = fs::remove_file(&path)
     {

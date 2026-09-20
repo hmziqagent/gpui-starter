@@ -12,13 +12,11 @@ pub(crate) fn test_card(title: &str, description: &str, boundary: bool, cx: &App
         theme.success
     };
 
-    // Outer wrapper: horizontal flex with colored stripe + card body.
+    // Colored accent stripe on the left, card body on the right.
     h_flex()
         .rounded(theme.radius_lg)
         .overflow_hidden()
-        // Colored accent stripe on the left
         .child(div().h_full().w(px(4.)).bg(accent).flex_shrink_0())
-        // Card body
         .child(
             div()
                 .flex_1()

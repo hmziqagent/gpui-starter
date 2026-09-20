@@ -52,7 +52,6 @@ impl QueryPlaygroundPage {
                 .py_3()
                 .child(
                     Button::new("pg-simple-fetch")
-                        // Finding 11: Use .primary() for the main action button.
                         .primary()
                         .label(if loading { "Fetching..." } else { "Fetch" })
                         .disabled(loading)

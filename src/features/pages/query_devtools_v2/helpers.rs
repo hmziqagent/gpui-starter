@@ -4,10 +4,6 @@ use gpui_component::{Selectable, button::Button};
 
 use super::dashboard::QueryDevToolsV2Page;
 
-// ---------------------------------------------------------------------------
-// Sort mode
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum QuerySort {
     Key,
@@ -15,10 +11,6 @@ pub(super) enum QuerySort {
     CacheAge,
     CacheHits,
 }
-
-// ---------------------------------------------------------------------------
-// Sort Button
-// ---------------------------------------------------------------------------
 
 pub(super) fn sort_button(
     label: &str,
@@ -39,10 +31,6 @@ pub(super) fn sort_button(
         _cx.notify();
     }))
 }
-
-// ---------------------------------------------------------------------------
-// Filter Button
-// ---------------------------------------------------------------------------
 
 pub(super) fn filter_button(
     target: Option<&str>,
@@ -68,10 +56,6 @@ pub(super) fn filter_button(
     }))
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 pub(super) fn format_cache_age(age_ms: Option<u64>) -> String {
     match age_ms {
         None => "n/a".to_string(),
@@ -89,8 +73,8 @@ pub(super) fn format_cache_age(age_ms: Option<u64>) -> String {
     }
 }
 
-/// Convert pixels to rems assuming a 16px base font size (Audit Finding 18:
-/// this divisor matches GPUI's default but may differ with system config).
+/// Convert pixels to rems assuming a 16px base font size (matches GPUI's
+/// default, but may differ with system config).
 pub(super) fn rems_from_px(px: f32) -> Rems {
     Rems(px / 16.0)
 }

@@ -1,16 +1,5 @@
-//! Non-fatal configuration validation tier.
-//!
-//! Runs a set of *lints* against a loaded [`AppConfig`] and returns a list of
-//! [`ConfigLint`] warnings. This tier is deliberately non-fatal: every check
-//! produces warnings (a [`Vec<ConfigLint>`]), never a [`Result`], so a config
-//! with cosmetic issues still loads. The caller is free to log the lints,
-//! surface them in a diagnostics page, or ignore them entirely.
-//!
-//! Adapted from the reference launcher (`config/validation.rs`) but rebound to
-//! the gpui-starter [`AppConfig`] / [`PersistedWindowBounds`] types. No
-//! launcher-specific names (no `LauncherTheme`, no search providers) leak
-//! through: this is generic boilerplate that checks the real gpui-starter
-//! config fields.
+//! Non-fatal config validation: lints an [`AppConfig`] into [`ConfigLint`]
+//! warnings without ever rejecting the load.
 
 use std::collections::HashSet;
 
@@ -50,10 +39,7 @@ impl std::fmt::Display for LintSeverity {
     }
 }
 
-/// A single non-fatal configuration warning.
-///
-/// `field` uses dotted-path notation (e.g. `"window_bounds.width"`,
-/// `"granted_permissions.<name>"`) so a UI can group lints by their target.
+/// A single non-fatal warning; `field` is a dotted path for UI grouping.
 #[derive(Clone, Debug)]
 pub struct ConfigLint {
     /// Dotted path to the offending field (e.g. `theme`, `window_bounds.x`).
@@ -75,47 +61,25 @@ impl ConfigLint {
     }
 }
 
-/// Update channels the updater recognises. Anything else is treated as unknown
-/// and the updater falls back to `stable`. Kept as a `const` slice so the lint
-/// stays self-contained (no import from the updater service required).
+/// Channels the updater recognises; anything else falls back to `stable`.
 const KNOWN_UPDATE_CHANNELS: &[&str] = &["stable", "beta", "nightly"];
 
 /// Locales the app ships translations for. Mirrors the two constants the rest
 /// of the crate treats as authoritative (`LOCALE_EN`, `LOCALE_ZH_CN`).
 const KNOWN_LOCALES: &[&str] = &[LOCALE_EN, LOCALE_ZH_CN];
 
-/// Permission keys the app actually understands. The config stores these as
-/// opaque `String`s, so anything outside this set is almost certainly stale
-/// (left over from a renamed/removed feature) or foreign data. This list is the
-/// single source of truth for "what may legitimately appear in
-/// `granted_permissions`"; extend it when a new permission is introduced.
+/// Permission keys the app understands; extend when a new permission ships.
 const KNOWN_PERMISSIONS: &[&str] = &["notifications"];
 
 /// Below this the window is unusably small; above this it likely exceeds a
 /// typical display and will be clamped by the platform.
 const MIN_WINDOW_DIM: f32 = 100.0;
-/// A generous upper bound for a single window dimension on a consumer display.
-/// Values beyond this are "on-screen-ish" failures (e.g. a corrupted value of
-/// `1e30`) rather than deliberate large windows.
-const MAX_WINDOW_DIM: f32 = 8192.0;
+/// Hard ceiling shared with the config-store sanitizer: bounds beyond this are
+/// treated as corrupt and dropped rather than linted.
+pub(crate) const MAX_WINDOW_DIM: f32 = 8192.0;
 
-/// Validate an [`AppConfig`], returning a list of non-fatal [`ConfigLint`]
-/// warnings.
-///
-/// This never fails: an empty `Vec` means "no issues found". The config is
-/// still usable regardless of what this returns. Checks performed:
-///
-/// * `window_bounds` sanity (non-negative, within a believable on-screen range)
-/// * `update_channel` is one of the recognised channels
-/// * `locale` is one of the shipped locales
-/// * `theme` is non-empty (a missing/blank theme would fall back to the default)
-/// * `granted_permissions` contains only known permission keys
-///
-/// Shortcut-conflict detection is intentionally omitted at this layer: the
-/// gpui-starter config only stores a single global shortcut enable flag plus an
-/// accelerator string (`"Alt+Space"`), so there is no user-editable set of
-/// bindings to conflict with. If multiple user-bindable shortcuts are added
-/// later, a `shortcut_conflicts` check can be appended here.
+/// Lint an [`AppConfig`]; an empty Vec means no issues. Covers window bounds,
+/// update channel, locale, theme, and permission keys.
 pub fn validate_config(cfg: &AppConfig) -> Vec<ConfigLint> {
     let mut lints = Vec::new();
 
@@ -203,11 +167,7 @@ fn validate_window_bounds(bounds: Option<&PersistedWindowBounds>) -> Vec<ConfigL
         ));
     }
 
-    // "On-screen-ish" heuristic: if both the width and height are finite and
-    // positive but absurdly large (e.g. a serialization bug produced 1e9), flag
-    // it. This complements the per-dimension ceiling check above for the case
-    // where a single dimension is just under the ceiling but the window is
-    // still clearly bogus.
+    // Complements the per-dimension ceiling: two legal-but-large dimensions.
     if b.width.is_finite()
         && b.height.is_finite()
         && b.width > 0.0
@@ -273,13 +233,8 @@ fn validate_locale(locale: &str) -> Vec<ConfigLint> {
     Vec::new()
 }
 
-/// `theme` must be non-empty. A blank theme would leave the UI unstyled until
-/// the runtime substitutes its default, so this is surfaced as a warning.
-///
-/// Note: we do *not* try to verify the theme exists in the active theme
-/// registry here, because that requires GPUI `App` context which this
-/// pure-data tier deliberately avoids taking. The runtime already handles an
-/// unknown theme name gracefully.
+/// `theme` must be non-empty; registry existence needs GPUI context this
+/// pure-data tier deliberately avoids (the runtime handles unknown names).
 fn validate_theme(theme: &str) -> Vec<ConfigLint> {
     if theme.trim().is_empty() {
         return vec![ConfigLint::new(

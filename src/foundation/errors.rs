@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{io, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -26,11 +24,6 @@ pub enum AppError {
     InvalidDeepLink { input: String, reason: String },
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-    /// Error at the IPC (inter-process) boundary: socket connect/write
-    /// failures, malformed forwarded messages, or decoding errors.
-    /// Serializable so it can ride the typed ForwardedResponse error field.
-    #[error("ipc error: {message}")]
-    Ipc { message: String },
 }
 
 impl AppError {
@@ -44,9 +37,7 @@ impl AppError {
 
     pub fn severity(&self) -> AppErrorSeverity {
         match self {
-            Self::InvalidDeepLink { .. } | Self::StateParse { .. } | Self::Ipc { .. } => {
-                AppErrorSeverity::Warning
-            }
+            Self::InvalidDeepLink { .. } | Self::StateParse { .. } => AppErrorSeverity::Warning,
             Self::PathInitialization
             | Self::StateRead { .. }
             | Self::StateWrite { .. }

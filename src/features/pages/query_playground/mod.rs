@@ -1,8 +1,5 @@
-//! Query V2 Playground — interactive demo of every gpui-query-v2 feature.
-//!
-//! Each section exercises a distinct capability: simple queries, cache policies,
-//! request policies, retry, mutations (with callbacks), infinite queries,
-//! select transforms, and imperative fetch with signal cancellation.
+//! Query V2 Playground — interactive demo of gpui-query-v2: queries, cache and
+//! request policies, retry, mutations, infinite queries, select transforms.
 
 mod queries;
 mod render_sections;
@@ -24,10 +21,6 @@ use gpui_query::client::QueryClient;
 use gpui_query::core::{
     InfiniteQueryResource, MappedQueryResource, MutationResource, QueryError, QueryResource,
 };
-
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlaygroundUser {
@@ -104,10 +97,7 @@ impl HttpFetchKind {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Page struct
-// ---------------------------------------------------------------------------
-
+// Page state: one lazily created entity + subscription per demo.
 pub struct QueryPlaygroundPage {
     pub(super) _subscriptions: Vec<Subscription>,
     // Simple query
@@ -160,7 +150,7 @@ pub struct QueryPlaygroundPage {
     // UI state
     pub(super) activity_log: Vec<String>,
     pub(super) log_scroll_handle: VirtualListScrollHandle,
-    // Shared callback log that survives past method returns (Finding 2)
+    // Mutation callbacks write here so their log survives past the click handler.
     pub(super) _callback_log: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
@@ -171,11 +161,9 @@ impl QueryPlaygroundPage {
             cx.notify();
         }));
 
-        // Finding 1/8: Create a proper editable InputState for mutation input.
         let mutation_input_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("Enter mutation variables..."));
 
-        // Subscribe to input changes so the UI re-reads from mutation_input_state.
         subs.push(cx.subscribe(
             &mutation_input_state,
             |_this: &mut Self, _state: Entity<InputState>, ev: &InputEvent, cx| {
@@ -224,19 +212,13 @@ impl QueryPlaygroundPage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Render
-// ---------------------------------------------------------------------------
-
 impl Render for QueryPlaygroundPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Extract theme colors upfront to release borrows before calling methods.
         let theme = cx.theme();
         let radius_lg = theme.radius_lg;
         let border = theme.border;
         let muted = theme.muted;
         let muted_foreground = theme.muted_foreground;
-        let _ = theme;
 
         let page = v_flex()
             .id("query-playground-page")
@@ -244,7 +226,6 @@ impl Render for QueryPlaygroundPage {
             .p_6()
             .gap_5()
             .overflow_y_scroll()
-            // -- Header --
             .child(
                 div()
                     .p_5()
@@ -275,25 +256,15 @@ impl Render for QueryPlaygroundPage {
                             ),
                     ),
             )
-            // -- 1. Simple Query --
             .child(self.render_simple_query(cx))
-            // -- 2. Cache Policies --
             .child(self.render_cache_policies(cx))
-            // -- 3. Request Policies --
             .child(self.render_request_policies(cx))
-            // -- 4. Retry Policy --
             .child(self.render_retry_policy(cx))
-            // -- 5. Mutation --
             .child(self.render_mutation(cx))
-            // -- 6. Infinite Query --
             .child(self.render_infinite_query(cx))
-            // -- 7. Select Transform --
             .child(self.render_select_transform(cx))
-            // -- 8. Imperative Fetch --
             .child(self.render_imperative_fetch(cx))
-            // -- 9. HTTP Fetching (real network via reqwest) --
             .child(self.render_http_fetching(cx))
-            // -- 10. Activity Log --
             .child(self.render_activity_log(cx));
 
         page

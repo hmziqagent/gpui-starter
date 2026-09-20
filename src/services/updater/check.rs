@@ -4,10 +4,6 @@ use std::sync::Arc;
 use super::types::*;
 use gpui::{App, UpdateGlobal as _};
 
-// ---------------------------------------------------------------------------
-// Check for updates
-// ---------------------------------------------------------------------------
-
 pub fn check_for_updates(cx: &mut App) {
     // Bail if already checking or downloading.
     let current = super::snapshot(cx);
@@ -23,7 +19,6 @@ pub fn check_for_updates(cx: &mut App) {
         _ => {}
     }
 
-    // Check connectivity first.
     let connectivity = crate::connectivity::snapshot(cx);
     if connectivity.state != crate::connectivity::ConnectivityState::Online {
         tracing::warn!(
@@ -57,10 +52,8 @@ pub fn check_for_updates(cx: &mut App) {
     #[cfg(not(target_family = "wasm"))]
     let current_version = current.current_version.clone();
 
-    // P8: If we already hold a manifest cached from a recent check, reuse it
-    // instead of hitting the network again. "Recent" = within one periodic
-    // check interval (PERIODIC_CHECK_INTERVAL_SECS), matching the staleness
-    // horizon used by the periodic re-check loop in `mod.rs`.
+    // A cached manifest is fresh for one periodic check interval (matching the
+    // re-check cadence in mod.rs); within that window skip the network fetch.
     #[cfg(not(target_family = "wasm"))]
     let cached_manifest = current.cached_manifest.clone();
     #[cfg(not(target_family = "wasm"))]
@@ -78,11 +71,9 @@ pub fn check_for_updates(cx: &mut App) {
 
     #[cfg(not(target_family = "wasm"))]
     cx.spawn(async move |cx| {
-        let manifest_result: Result<UpdateManifest, String> = if cache_fresh {
-            // cache_fresh is only true when cached_manifest is Some.
-            Ok(cached_manifest.expect("cache_fresh implies cached_manifest is Some"))
-        } else {
-            fetch_manifest(rt.clone(), client.clone()).await
+        let manifest_result: Result<UpdateManifest, String> = match cached_manifest {
+            Some(manifest) if cache_fresh => Ok(manifest),
+            _ => fetch_manifest(rt.clone(), client.clone()).await,
         };
 
         cx.update(move |cx| match manifest_result {
@@ -95,9 +86,8 @@ pub fn check_for_updates(cx: &mut App) {
                     "fetched update manifest"
                 );
 
-                // P8: Cache the manifest and the resolved platform asset so
-                // `download_update` can skip re-fetching. Re-storing on a cache
-                // hit is idempotent and harmless.
+                // Cache the manifest and platform asset so download_update can
+                // skip re-fetching; re-storing on a cache hit is idempotent.
                 let asset_for_cache = {
                     let key = platform_key();
                     manifest.platforms.get(&key).cloned()
@@ -107,8 +97,7 @@ pub fn check_for_updates(cx: &mut App) {
                     snap.cached_asset = asset_for_cache;
                 });
 
-                // Only stamp `last_check` when we actually talked to the
-                // network — a cache hit did not re-verify the manifest.
+                // Stamp last_check only when the network was actually hit.
                 if !cache_fresh {
                     let now = chrono::Utc::now().to_rfc3339();
                     UpdateSnapshot::update_global(cx, |snap, _cx| {
@@ -124,9 +113,8 @@ pub fn check_for_updates(cx: &mut App) {
                     semver::Version::parse(&current_version),
                 ) {
                     (Ok(manifest_ver), Ok(cur_ver)) => {
+                        super::reset_check_retry(cx);
                         if manifest_ver > cur_ver {
-                            // Reset retry count on successful check.
-                            super::reset_check_retry(cx);
                             let status = UpdateStatus::Available {
                                 version: manifest.version.clone(),
                                 notes: manifest.release_notes.clone(),
@@ -134,8 +122,7 @@ pub fn check_for_updates(cx: &mut App) {
                             super::set_status(status, cx);
                             super::notify_update_available(&manifest.version, cx);
                         } else {
-                            // Equal or older manifest version — we are up to date (or ahead).
-                            super::reset_check_retry(cx);
+                            // Equal or older manifest — up to date (or ahead).
                             super::set_status(UpdateStatus::UpToDate, cx);
                         }
                     }
@@ -165,36 +152,20 @@ pub fn check_for_updates(cx: &mut App) {
     .detach();
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers — retry/backoff (shared by check and download)
-// ---------------------------------------------------------------------------
-
-/// Field accessor used by [`schedule_retry`] to read/write the check retry
-/// counter on [`UpdateSnapshot`].
+/// Accessor by which [`schedule_retry`] finds the right retry counter field.
 pub(super) fn check_retry_field(snap: &mut UpdateSnapshot) -> &mut u32 {
     &mut snap.check_retry_count
 }
 
-/// Field accessor used by [`schedule_retry`] to read/write the download retry
-/// counter on [`UpdateSnapshot`].
+/// Accessor by which [`schedule_retry`] finds the right retry counter field.
 pub(super) fn download_retry_field(snap: &mut UpdateSnapshot) -> &mut u32 {
     &mut snap.download_retry_count
 }
 
-/// Shared retry/backoff scheduler used by both `handle_check_failure` and
-/// `handle_download_failure`.
-///
-/// Reads the retry counter via `retry_field`, increments it, and (when still
-/// under [`MAX_UPDATE_RETRIES`]) waits out the exponential backoff on the
-/// background executor and then invokes `rearm` to kick off the next attempt.
-/// Returns `true` when a retry was scheduled, or `false` when retries are
-/// exhausted — the caller owns the terminal error path in that case.
-///
-/// The caller is responsible for setting the interim status (`Error` or
-/// `Available`); this helper only touches the retry counter and the rearm.
-///
-/// Uses the GPUI background-executor timer instead of spawning a fresh tokio
-/// task purely to sleep, so the recheck is cooperatively scheduled.
+/// Increment the retry counter via `retry_field` and, while under
+/// [`MAX_UPDATE_RETRIES`], rearm after exponential backoff on the GPUI
+/// background executor. Returns false when retries are exhausted — the caller
+/// owns the terminal error path and the interim status.
 pub(super) fn schedule_retry<F, R>(
     cx: &mut App,
     retry_field: F,
@@ -241,11 +212,6 @@ where
     true
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers — retry/backoff for checks
-// ---------------------------------------------------------------------------
-
-/// Handle a failed check with retry/backoff logic.
 fn handle_check_failure(error: String, cx: &mut App) {
     let scheduled = schedule_retry(cx, check_retry_field, "check", check_for_updates);
     super::set_status(UpdateStatus::Error(error.clone()), cx);
@@ -255,21 +221,12 @@ fn handle_check_failure(error: String, cx: &mut App) {
             error = %error,
             "update check failed — retries exhausted, setting permanent error"
         );
-        // Notify the user about permanent failure.
         super::notify_update_error(cx);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers — networking
-// ---------------------------------------------------------------------------
-
-/// Fetch the update manifest from the configured URL.
-///
-/// Single source of truth for the 5-step reqwest pipeline
-/// (GET → timeout → status check → bytes → `serde_json`). Callers that also
-/// need a platform asset should use [`fetch_platform_asset`], which delegates
-/// here and then resolves the platform key.
+/// GET → timeout → status check → bytes → serde. Callers that also need a
+/// platform asset should use [`fetch_platform_asset`].
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn fetch_manifest(
     rt: Arc<tokio::runtime::Runtime>,

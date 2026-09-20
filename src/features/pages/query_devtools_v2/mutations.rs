@@ -6,10 +6,6 @@ use gpui_query::core::MutationStatus;
 
 use super::dashboard::QueryDevToolsV2Page;
 
-// ---------------------------------------------------------------------------
-// Mutations Table
-// ---------------------------------------------------------------------------
-
 pub(super) fn render_mutations_table(
     diagnostic: &Option<ClientDiagnostic>,
     cx: &mut Context<QueryDevToolsV2Page>,
@@ -22,7 +18,6 @@ pub(super) fn render_mutations_table(
     let primary = theme.primary;
     let danger = theme.danger;
     let radius = theme.radius;
-    let _ = theme;
 
     let mutations: Vec<_> = diagnostic
         .as_ref()
@@ -87,8 +82,7 @@ pub(super) fn render_mutations_table(
 
             let status_label = m.status.label();
 
-            // Audit Finding 3: use a stable identifier combining key and index
-            // instead of just the enumeration index to avoid ID shifts on removal.
+            // Stable id from key + index so ids don't shift on removal.
             let row_id = format!(
                 "v2-mutation-row-{}-{}",
                 m.key.as_deref().unwrap_or("anon"),

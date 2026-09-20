@@ -1,10 +1,6 @@
 use super::types::{DEFAULT_MANIFEST_URL, current_app_version, pending_swap_path, platform_key};
 use super::*;
 
-// ---------------------------------------------------------------------------
-// platform_key
-// ---------------------------------------------------------------------------
-
 #[test]
 fn platform_key_format() {
     let key = platform_key();
@@ -22,19 +18,11 @@ fn platform_key_format() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// current_app_version
-// ---------------------------------------------------------------------------
-
 #[test]
 fn current_app_version_matches_cargo_pkg() {
     let version = current_app_version();
     assert_eq!(version, env!("CARGO_PKG_VERSION"));
 }
-
-// ---------------------------------------------------------------------------
-// UpdateManifest JSON parsing
-// ---------------------------------------------------------------------------
 
 #[test]
 fn manifest_parse_valid_full() {
@@ -77,10 +65,6 @@ fn manifest_parse_invalid_json() {
     assert!(serde_json::from_str::<UpdateManifest>(json).is_err());
 }
 
-// ---------------------------------------------------------------------------
-// Semver comparison (via the same logic the updater uses)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn semver_newer_available() {
     let manifest_ver = semver::Version::parse("2.0.0").unwrap();
@@ -108,18 +92,10 @@ fn semver_invalid_version() {
     assert!(semver::Version::parse("not-a-version").is_err());
 }
 
-// ---------------------------------------------------------------------------
-// UpdateStatus::default
-// ---------------------------------------------------------------------------
-
 #[test]
 fn update_status_default_is_idle() {
     assert_eq!(UpdateStatus::default(), UpdateStatus::Idle);
 }
-
-// ---------------------------------------------------------------------------
-// pending_swap_path consistency
-// ---------------------------------------------------------------------------
 
 #[test]
 fn pending_swap_path_is_consistent() {
@@ -130,10 +106,6 @@ fn pending_swap_path_is_consistent() {
         "pending_swap_path should return the same path on every call"
     );
 }
-
-// ---------------------------------------------------------------------------
-// DEFAULT_MANIFEST_URL is not empty
-// ---------------------------------------------------------------------------
 
 #[test]
 fn default_manifest_url_not_empty() {

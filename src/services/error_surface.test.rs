@@ -26,8 +26,20 @@ fn error_record_serializes_with_category() {
 }
 
 #[test]
+fn scrub_home_replaces_home_prefix() {
+    assert_eq!(
+        scrub_home_with("/home/me/logs/x.log", "/home/me"),
+        "~/logs/x.log"
+    );
+    // Replacement is textual (matches the crash_report scrub), so a shared
+    // prefix without a path boundary is also rewritten — still scrubbed.
+    assert_eq!(scrub_home_with("/home/me2/x", "/home/me"), "~2/x");
+    assert_eq!(scrub_home_with("plain text", ""), "plain text");
+}
+
+#[test]
 fn persist_and_load_roundtrip() {
-    use crate::storage::SqliteStorage;
+    use crate::storage::{SqliteStorage, StorageBackend as _};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("test_errors.db");
@@ -66,7 +78,7 @@ fn persist_and_load_roundtrip() {
         .block_on(persist_error(&backend, &record))
         .expect("persist");
     let loaded = runtime()
-        .block_on(load_error_history(&backend, 10))
+        .block_on(backend.load_error_history(10))
         .expect("load");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].message, "disk full");
@@ -76,7 +88,7 @@ fn persist_and_load_roundtrip() {
 
 #[test]
 fn load_error_history_respects_limit() {
-    use crate::storage::SqliteStorage;
+    use crate::storage::{SqliteStorage, StorageBackend as _};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("test_limit.db");
@@ -114,7 +126,7 @@ fn load_error_history_respects_limit() {
     }
 
     let loaded = runtime
-        .block_on(load_error_history(&backend, 3))
+        .block_on(backend.load_error_history(3))
         .expect("load");
     assert_eq!(loaded.len(), 3);
 }

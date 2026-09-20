@@ -12,12 +12,8 @@ use gpui_query::core::{QueryResource, QueryStatus, RetryPolicy};
 use super::super::QueryPlaygroundPage;
 use super::super::ui_helpers::{chip, mini_card, section_card, status_badge};
 
-// Helpers for the recurring `Option<(Entity<QueryResource<..>>, Subscription)>`
-// read shape used across the playground render sections (audit finding D4).
-// Each encapsulates the `read_with` + `map_or`/`and_then` boilerplate so call
-// sites read as one-liners. Note: these only fit the QueryStatus/Option<T>
-// accessors — MutationStatus, infinite `page_count`, and select bare-Entity
-// sites deliberately stay inline.
+// Readers for the recurring `Option<(Entity<QueryResource<..>>, Subscription)>`
+// shape; MutationStatus/infinite/bare-Entity sites don't fit and stay inline.
 
 /// Read the status of an optional query entity, defaulting to [`QueryStatus::Idle`].
 fn query_status<T: 'static, E: 'static>(

@@ -50,27 +50,16 @@ struct DemoTaskToast;
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-pub fn is_shutdown_requested() -> bool {
+fn is_shutdown_requested() -> bool {
     SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
 }
 
-pub fn request_shutdown() {
+fn request_shutdown() {
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-}
-
-#[allow(dead_code)]
-pub fn reset_for_testing() {
-    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 }
 
 pub fn initialize(cx: &mut App) {
     cx.set_global(TaskRegistry::default());
-}
-
-pub fn snapshot(cx: &App) -> Vec<BackgroundTask> {
-    cx.try_global::<TaskRegistry>()
-        .map(|state| state.tasks.clone())
-        .unwrap_or_default()
 }
 
 pub fn active_count(cx: &App) -> usize {
@@ -118,7 +107,7 @@ pub fn start_demo_task_in_window(window: &mut Window, cx: &mut App) {
     spawn_demo_task_in_window(id, window, cx);
 }
 
-pub fn start(id: TaskId, label: String, progress: TaskProgress, cx: &mut App) {
+fn start(id: TaskId, label: String, progress: TaskProgress, cx: &mut App) {
     tracing::info!(
         target: "gpui_starter::tasks",
         task_id = %id,
@@ -147,14 +136,14 @@ pub fn start(id: TaskId, label: String, progress: TaskProgress, cx: &mut App) {
     );
 }
 
-pub fn update_progress(id: TaskId, progress: TaskProgress, cx: &mut App) {
+fn update_progress(id: TaskId, progress: TaskProgress, cx: &mut App) {
     mutate_task(id, cx, |task| {
         task.progress = progress;
         task.status = TaskStatus::Running;
     });
 }
 
-pub fn succeed(id: TaskId, cx: &mut App) {
+fn succeed(id: TaskId, cx: &mut App) {
     mutate_task(id, cx, |task| {
         task.status = TaskStatus::Succeeded;
         task.progress = TaskProgress::Percent(100);
@@ -163,7 +152,7 @@ pub fn succeed(id: TaskId, cx: &mut App) {
     });
 }
 
-pub fn fail(id: TaskId, error: String, cx: &mut App) {
+fn fail(id: TaskId, error: String, cx: &mut App) {
     mutate_task(id, cx, |task| {
         task.status = TaskStatus::Failed;
         task.finished_at = Some(AppTimestamp::now());
@@ -171,15 +160,7 @@ pub fn fail(id: TaskId, error: String, cx: &mut App) {
     });
 }
 
-pub fn cancel(id: TaskId, reason: String, cx: &mut App) {
-    mutate_task(id, cx, |task| {
-        task.status = TaskStatus::Cancelled;
-        task.finished_at = Some(AppTimestamp::now());
-        task.error = Some(reason);
-    });
-}
-
-pub fn force_cancel_remaining(cx: &mut App) {
+fn force_cancel_remaining(cx: &mut App) {
     let registry = cx.default_global::<TaskRegistry>();
     let mut changed = false;
     for task in &mut registry.tasks {
@@ -227,12 +208,6 @@ pub fn drain_with_timeout(timeout: Duration, cx: &mut App) -> Task<()> {
                 .await;
         }
     })
-}
-
-#[allow(dead_code)]
-pub fn shutdown(cx: &mut App) {
-    request_shutdown();
-    force_cancel_remaining(cx);
 }
 
 fn mutate_task(id: TaskId, cx: &mut App, mutate: impl FnOnce(&mut BackgroundTask)) {
@@ -332,12 +307,8 @@ enum DemoTaskNotificationKind {
     Cancelled,
 }
 
-/// Build the notification payload for a demo task state change.
-///
-/// Shared by [`push_demo_task_notification`] (deferred dispatch via a window
-/// handle) and [`push_demo_task_notification_now`] (immediate dispatch on the
-/// current window). Both apply the same `id1` toast identity so re-pushing a
-/// kind replaces the prior toast instead of stacking a duplicate.
+/// Build the demo-task notification payload; both dispatch helpers apply the
+/// same `id1` toast identity so re-pushing replaces rather than stacks.
 fn build_demo_task_notification(id: TaskId, kind: DemoTaskNotificationKind) -> Notification {
     match kind {
         DemoTaskNotificationKind::Loading => Notification::new()

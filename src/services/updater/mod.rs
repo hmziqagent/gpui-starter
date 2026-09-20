@@ -5,12 +5,8 @@ mod types;
 
 use gpui::UpdateGlobal as _;
 
-// Re-export all public items so that external import paths remain unchanged.
+// Re-exported so external import paths stay stable.
 pub use types::{CheckForUpdates, PlatformAsset, UpdateManifest, UpdateSnapshot, UpdateStatus};
-
-// ---------------------------------------------------------------------------
-// Initialize
-// ---------------------------------------------------------------------------
 
 pub fn initialize(cx: &mut gpui::App) {
     let channel = crate::app_state::update_channel(cx);
@@ -25,37 +21,25 @@ pub fn initialize(cx: &mut gpui::App) {
         },
         check_retry_count: 0,
         download_retry_count: 0,
-        // Cache fields (cached_manifest / cached_asset) default to None via
-        // `..Default::default()` — they are populated lazily by check_for_updates.
         ..Default::default()
     });
 
-    // Register the CheckForUpdates action handler.
     cx.on_action(|_: &CheckForUpdates, cx| {
         check::check_for_updates(cx);
     });
 
-    // Self-update is a desktop-only concept (binary swap on disk). Wasm
-    // "updates" ship with the page reload — skip the scheduled checks; the
-    // action handler above still runs and resolves to UpToDate.
+    // Self-update is desktop-only (binary swap on disk); wasm ships updates
+    // with the page reload. The action handler above still runs either way.
     #[cfg(not(target_family = "wasm"))]
     {
-        // Schedule a delayed startup check (5 seconds after launch).
-        let startup_rt = cx
-            .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
-            .0
-            .runtime
-            .clone();
+        // Startup check after 5 seconds, then re-check every 4 hours. GPUI
+        // background-executor timers instead of a spawned tokio sleep task.
         cx.spawn(async move |cx| {
-            startup_rt
-                .spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(
-                        types::STARTUP_CHECK_DELAY_SECS,
-                    ))
-                    .await;
-                })
-                .await
-                .ok();
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(
+                    types::STARTUP_CHECK_DELAY_SECS,
+                ))
+                .await;
             cx.update(|cx| {
                 tracing::info!(
                     target: "gpui_starter::updater",
@@ -66,23 +50,13 @@ pub fn initialize(cx: &mut gpui::App) {
         })
         .detach();
 
-        // Schedule periodic re-check every 4 hours.
-        let periodic_rt = cx
-            .global::<crate::services::tokio_runtime::TokioRuntimeGlobal>()
-            .0
-            .runtime
-            .clone();
         cx.spawn(async move |cx| {
             loop {
-                periodic_rt
-                    .spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(
-                            types::PERIODIC_CHECK_INTERVAL_SECS,
-                        ))
-                        .await;
-                    })
-                    .await
-                    .ok();
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(
+                        types::PERIODIC_CHECK_INTERVAL_SECS,
+                    ))
+                    .await;
 
                 let should_check: bool = cx.update(|cx| {
                     let snap = snapshot(cx);
@@ -112,51 +86,27 @@ pub fn initialize(cx: &mut gpui::App) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Snapshot
-// ---------------------------------------------------------------------------
-
 pub fn snapshot(cx: &gpui::App) -> UpdateSnapshot {
     cx.try_global::<UpdateSnapshot>()
         .cloned()
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// Check for updates (re-export)
-// ---------------------------------------------------------------------------
-
 pub fn check_for_updates(cx: &mut gpui::App) {
     check::check_for_updates(cx);
 }
-
-// ---------------------------------------------------------------------------
-// Download update (re-export)
-// ---------------------------------------------------------------------------
 
 pub fn download_update(cx: &mut gpui::App) {
     download::download_update(cx);
 }
 
-// ---------------------------------------------------------------------------
-// Apply update (re-export)
-// ---------------------------------------------------------------------------
-
 pub fn apply_update(cx: &mut gpui::App) {
     apply::apply_update(cx);
 }
 
-// ---------------------------------------------------------------------------
-// Check pending swap (re-export)
-// ---------------------------------------------------------------------------
-
 pub fn check_pending_swap(cx: &mut gpui::App) {
     apply::check_pending_swap(cx);
 }
-
-// ---------------------------------------------------------------------------
-// Set channel
-// ---------------------------------------------------------------------------
 
 pub fn set_channel(channel: &str, cx: &mut gpui::App) {
     let ch = if channel.is_empty() {
@@ -176,10 +126,6 @@ pub fn set_channel(channel: &str, cx: &mut gpui::App) {
         "update channel set"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers — status management
-// ---------------------------------------------------------------------------
 
 fn set_status(status: UpdateStatus, cx: &mut gpui::App) {
     tracing::debug!(
@@ -203,10 +149,6 @@ fn reset_download_retry(cx: &mut gpui::App) {
         snap.download_retry_count = 0;
     });
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers — notifications
-// ---------------------------------------------------------------------------
 
 /// Dispatch a native notification for "update available".
 fn notify_update_available(version: &str, cx: &mut gpui::App) {
@@ -237,7 +179,6 @@ fn notify_update_error(cx: &mut gpui::App) {
 
 /// Send a notification via the notification service without requiring a window handle.
 fn dispatch_background_notification(title: &str, body: &str, cx: &mut gpui::App) {
-    // Record in the notification inbox.
     crate::notifications::inbox::record_attempt(
         crate::notifications::inbox::NotificationAttemptRecord {
             title: title.to_string(),
@@ -251,7 +192,6 @@ fn dispatch_background_notification(title: &str, body: &str, cx: &mut gpui::App)
         cx,
     );
 
-    // Also attempt a native notification via the service if available.
     let state = match cx.try_global::<crate::notifications::NativeNotificationState>() {
         Some(s) => s.clone(),
         None => return,

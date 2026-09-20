@@ -1,28 +1,11 @@
-//! Typed command/response layer that rides on gpui-starter's existing
-//! newline-delimited JSON IPC framing (see [`super::IpcEndpoint`] and
-//! `src/platform/process/single_instance.rs`).
-//!
-//! This module is intentionally pure data + serde: it defines the wire
-//! types for a bidirectional request/response protocol and leaves the
-//! actual socket plumbing to the integration stage. A second instance
-//! (or any IPC client) encodes a [`ForwardedRequest`] as a single JSON
-//! line; the primary instance decodes it, runs the [`ForwardedCommand`],
-//! and replies with a [`ForwardedResponse`] line keyed by the shared
-//! `id`.
-//!
-//! The framing already exists (one UTF-8 JSON object per `\n`). We do
-//! **not** introduce tarpc, tokio-serde, or any length-prefixed codec.
+//! Wire types for the typed IPC command/response protocol. Transport is one
+//! compact JSON object per line over `crate::single_instance`'s local socket.
 
 use serde::{Deserialize, Serialize};
 
 const LOG: &str = "gpui_starter::ipc::command";
 
-/// A command that can be forwarded to the primary instance over IPC.
-///
-/// These mirror the high-level UI actions a second launch (or external
-/// caller) may want to trigger in the already-running process. They are
-/// kept generic and boilerplate-level: no launcher-specific modes,
-/// themes, or item types leak through.
+/// A command a second instance can trigger in the primary process.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "payload")]
 pub enum ForwardedCommand {
@@ -41,7 +24,7 @@ pub enum ForwardedCommand {
 }
 
 impl ForwardedCommand {
-    /// A short, human-readable label suitable for tracing/log fields.
+    /// Short label for tracing/log fields.
     pub fn label(&self) -> &'static str {
         match self {
             Self::ShowWindow => "show_window",
@@ -54,12 +37,7 @@ impl ForwardedCommand {
     }
 }
 
-/// A single request envelope.
-///
-/// `id` correlates a [`ForwardedResponse`] back to its request across
-/// the process boundary. Callers SHOULD mint monotonically increasing
-/// ids; the only hard requirement is uniqueness among in-flight
-/// requests (see [`super::rpc`] for the pending-request map).
+/// Request envelope; `id` correlates the [`ForwardedResponse`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForwardedRequest {
     pub id: u64,
@@ -73,12 +51,8 @@ impl ForwardedRequest {
     }
 }
 
-/// The reply to a [`ForwardedRequest`], keyed by the same `id`.
-///
-/// `ok == true` with `error == None` denotes success. On failure `ok`
-/// is `false` and `error` carries a best-effort, non-structured message
-/// safe to surface in logs (never expose it verbatim to end users
-/// without sanitizing).
+/// Reply to a [`ForwardedRequest`], keyed by the same `id`. The error string
+/// is best-effort and log-safe, not for verbatim display to end users.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForwardedResponse {
     pub id: u64,

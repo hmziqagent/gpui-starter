@@ -16,20 +16,20 @@ gpui-form = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b
 gpui-form-collection = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b2551d1b7be83b12e519cd0c908c28ff" }
 
 # GPUI ecosystem — crates.io `gpui-pre` is the published snapshot of zed gpui
-# (PACKAGE name gpui-pre, lib name stays `gpui`); gpui-kit 0.6.1 builds on it.
+# (PACKAGE name gpui-pre, lib name stays `gpui`); gpui-kit 0.6.4 builds on it.
 # gpui-kit is listed directly because gpui-form's derives emit ::gpui_kit::
 # paths into consuming crates; gpui-kit-assets replaces gpui-component-assets
 # (the old longbridge/gpui-component git URL is retired with the zed patches).
-gpui = { package = "gpui-pre", version = "0.3.1" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
+gpui = { package = "gpui-pre", version = "0.3.5" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
-gpui-kit = "0.6.1"
-gpui-component = "0.6.1"
-gpui-kit-assets = "0.6.1"
+gpui-kit = "0.6.4"
+gpui-component = "0.6.4"
+gpui-kit-assets = "0.6.4"
 
 # Serialization & data
 anyhow = "1"
@@ -116,14 +116,11 @@ crate-type = ["rlib", "cdylib"]
 # Enable OTLP export over HTTP/Protobuf for the telemetry module.
 # See src/telemetry.rs for the full list of optional dependencies this pulls in.
 otlp = ["dep:opentelemetry-otlp", "dep:opentelemetry_sdk"]
-websocket = ["dep:tokio-tungstenite", "dep:tokio-stream"]
+websocket = ["dep:tokio-tungstenite"]
 # AI chat streaming page (default OFF). flume is unconditional
 # (services/streaming.rs needs it regardless), so this is an empty gate
 # that only controls the ai_chat feature-page module.
 ai-chat = []
-# Wayland clipboard change monitor (default OFF, Linux-only). Activates the
-# optional wayland deps + the monitor.rs module.
-clipboard-history = ["dep:wayland-client", "dep:wayland-protocols-wlr"]
 # XDG Desktop Portal notification backend for Flatpak/Snap/sandboxed runs
 # (default OFF). When ON and running sandboxed, notifications route through
 # org.freedesktop.portal.Notification via ashpd (reuses the transitive 0.13.x
@@ -180,7 +177,6 @@ base64 = "0.22"
 sha2 = "0.10"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
-tokio-stream = { version = "0.1", optional = true }
 tempfile = "3.27.0"
 reqwest = { version = "0.12.24", default-features = false, features = [
     "cookies",
@@ -190,7 +186,6 @@ reqwest = { version = "0.12.24", default-features = false, features = [
     "stream",
 ] }
 opentelemetry = "0.24.0"
-tracing-opentelemetry = "0.25.0"
 # Optional: OTLP HTTP exporter for remote telemetry (enable with --features otlp)
 opentelemetry-otlp = { version = "0.17.0", optional = true, features = [
     "http-proto",
@@ -208,8 +203,6 @@ sys-locale = "0.3"
 flume = "0.11"
 fuzzy-matcher = "0.3"
 rust-embed = "8"
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols-wlr = { version = "0.3", optional = true, features = ["client"] }
 
 [dev-dependencies]
 insta.workspace = true
@@ -248,7 +241,7 @@ libc = "0.2"
 # these are cfg-fenced separately behind target_family = "wasm" stubs.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 single-instance = "0.3.3"
-interprocess = { version = "2.4.2", features = ["tokio"] }
+interprocess = "2.4.2"
 network-interface = "2.0.3"
 keyring = { version = "3.6.3", features = ["apple-native"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }

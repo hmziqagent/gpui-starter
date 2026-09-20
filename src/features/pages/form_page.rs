@@ -18,10 +18,6 @@ use koruma_collection::{
     format::{EmailValidation, PhoneNumberValidation, UrlValidation},
 };
 
-// ---------------------------------------------------------------------------
-// Form model with derive macros
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Default, EsFluentVariants, GpuiForm, Koruma, KorumaAllFluent)]
 #[fluent_variants(keys = ["description", "label"])]
 #[gpui_form(koruma(fluent))]
@@ -47,16 +43,8 @@ pub struct RegistrationForm {
     pub website: String,
 }
 
-// ---------------------------------------------------------------------------
-// Form page
-// ---------------------------------------------------------------------------
-
-/// The five input fields of [`RegistrationForm`].
-///
-/// Centralizing field identity here means adding a new field is one enum
-/// variant plus one `subscribe_field` / `render_field` / `on_reset_field` call,
-/// instead of in-sync edits scattered across `new`, `render`, `on_reset`, and
-/// `error_for`.
+/// The five input fields of [`RegistrationForm`]; the enum keeps label, input,
+/// reset, and error handling in sync per field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FormField {
     Name,
@@ -75,12 +63,8 @@ impl FormField {
         FormField::Website,
     ];
 
-    /// Writes the latest input value into the form value holder for this field.
-    ///
-    /// The gpui-form 0.6 value holder stores plain `String` fields directly
-    /// (`DirectValueStorage`), so a cleared input maps to the empty string —
-    /// which keeps the NonEmpty/Email/... validators failing exactly like the
-    /// old `Option<String>`-based holder did.
+    /// Writes the latest input value into the form value holder; a cleared
+    /// input maps to the empty string so validators keep failing on it.
     fn set_on(self, holder: &mut RegistrationFormFormValueHolder, value: Option<String>) {
         let value = value.unwrap_or_default();
         match self {
@@ -117,7 +101,6 @@ impl FormPage {
         let phone = cx.new(|cx| RegistrationFormFormComponents::phone(window, cx));
         let website = cx.new(|cx| RegistrationFormFormComponents::website(window, cx));
 
-        // One parametrized closure replaces five near-identical per-field blocks.
         let _subscriptions = vec![
             Self::subscribe_field(FormField::Name, &name, cx),
             Self::subscribe_field(FormField::Email, &email, cx),
@@ -144,12 +127,8 @@ impl FormPage {
         }
     }
 
-    /// Subscribes to an input's `InputEvent` and mirrors its value into
-    /// `current_data` for `field`, marking the page dirty so the next render
-    /// re-validates. The gpui-form 0.6 `value_change` shape helper normalizes
-    /// the event into `ValueChange::Set`/`Clear`/`Unchanged`. One closure
-    /// parametrized by the field enum replaces five near-identical per-field
-    /// closures.
+    /// Mirrors an input's event into `current_data` for `field` and marks the
+    /// page dirty; `value_change` normalizes Set/Clear/Unchanged.
     fn subscribe_field(
         field: FormField,
         input: &Entity<InputState>,
@@ -204,8 +183,7 @@ impl FormPage {
     }
 
     /// Recomputes `cached_errors` from `current_data.validate()` and clears the
-    /// dirty flag. Called lazily from `render` (when dirty && touched) and from
-    /// the submit handler, so validation no longer runs on every render.
+    /// dirty flag; called from `render` (when dirty && touched) and on submit.
     fn recompute_validation(&mut self) {
         if let Some(e) = self.current_data.validate().err() {
             let to_err = |msgs: Vec<String>| {
@@ -335,7 +313,6 @@ impl Render for FormPage {
                     .child(self.render_field(FormField::Password, danger))
                     .child(self.render_field(FormField::Phone, danger))
                     .child(self.render_field(FormField::Website, danger))
-                    // Terms
                     .child(
                         field().label_indent(false).child(
                             Checkbox::new("agree-terms")
@@ -347,7 +324,6 @@ impl Render for FormPage {
                                 })),
                         ),
                     )
-                    // Actions
                     .child(
                         field().label_indent(false).child(
                             h_flex()

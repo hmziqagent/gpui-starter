@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -7,10 +5,6 @@ use url::Url;
 
 use crate::errors::AppError;
 use crate::routes::{APP_URL_SCHEME, VALID_HOSTS};
-
-// ---------------------------------------------------------------------------
-// Deep-link URL validation
-// ---------------------------------------------------------------------------
 
 /// Validate that a deep-link URL uses the expected scheme (`gpui-starter://`)
 /// and reject unexpected hosts.
@@ -36,10 +30,6 @@ pub fn validate_deep_link_url(url: &str) -> Result<Url, AppError> {
     Ok(parsed)
 }
 
-// ---------------------------------------------------------------------------
-// File-path validation
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Error)]
 pub enum ValidationError {
     #[error("path traversal detected in `{input}`")]
@@ -55,15 +45,14 @@ pub enum ValidationError {
     Io(#[from] std::io::Error),
 }
 
-/// Canonicalize a path and verify it contains no `..` traversal components
-/// and stays within one of the given `allowed_dirs`.
+/// Canonicalize `path` and verify it has no `..` components and stays within
+/// one of `allowed_dirs`. The file must exist.
 pub fn validate_file_path(
     path: &str,
     allowed_dirs: &[PathBuf],
 ) -> Result<PathBuf, ValidationError> {
     let raw = Path::new(path);
 
-    // Reject any component that is a parent-directory marker.
     for component in raw.components() {
         if component == std::path::Component::ParentDir {
             return Err(ValidationError::PathTraversal {
@@ -72,12 +61,10 @@ pub fn validate_file_path(
         }
     }
 
-    // Resolve to a canonical absolute path (file must exist).
     let canonical = raw.canonicalize().map_err(|_| ValidationError::NotFound {
         input: path.to_string(),
     })?;
 
-    // Verify the canonical path starts with at least one allowed dir.
     let permitted = allowed_dirs.iter().any(|dir| {
         let Ok(canonical_dir) = dir.canonicalize() else {
             return false;
@@ -94,45 +81,24 @@ pub fn validate_file_path(
     Ok(canonical)
 }
 
-// ---------------------------------------------------------------------------
-// String sanitization
-// ---------------------------------------------------------------------------
-
-/// Maximum length for a sanitized string.
+/// Upper bound for [`sanitize_string`] output.
 pub const MAX_SANITIZED_LENGTH: usize = 4096;
 
-/// Strip ASCII control characters (except newline and tab), trim whitespace,
-/// and enforce a length limit.
+/// Strip ASCII control characters except newline/tab, trim, and cap length.
 pub fn sanitize_string(input: &str) -> String {
     let mut out: String = input
         .chars()
-        .filter(|c| {
-            if c.is_control() {
-                // Keep newline and tab — they are legitimate whitespace.
-                *c == '\n' || *c == '\t'
-            } else {
-                true
-            }
-        })
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect();
 
     out.truncate(MAX_SANITIZED_LENGTH);
     out.trim().to_string()
 }
 
-// ---------------------------------------------------------------------------
-// Notification ID validation
-// ---------------------------------------------------------------------------
-
-/// Return `true` when `id` is non-empty and consists solely of ASCII
-/// alphanumeric characters and hyphens.
+/// `true` when `id` is non-empty ASCII alphanumerics and hyphens.
 pub fn validate_notification_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[path = "validation.test.rs"]

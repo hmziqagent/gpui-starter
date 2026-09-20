@@ -2,23 +2,16 @@
 //! its per-target implementations, and the boot/runtime surface in
 //! [`runtime`].
 //!
-//! - Native: [`backend::SqliteStorage`] holds one shared `rusqlite`
-//!   connection behind a mutex.
-//! - Wasm: [`web::WebSqliteStorage`] talks to the OPFS sqlite worker
-//!   (`wasm/sqlite/worker.js`, built on the vendored
-//!   `@sqlite.org/sqlite-wasm` engine) over the JSON protocol in
-//!   [`protocol`] and falls back to the unavailable-snapshot behavior when
-//!   OPFS or the Worker API is missing.
-//!
-//! The trait is async ([`async_trait`], same shape as
-//! `NotificationBackend`): the wasm backend can only answer via worker
-//! message round-trips. Native bodies stay synchronous internally — no
-//! await points — so SQLite I/O still completes without ever yielding.
+//! Native: [`backend::SqliteStorage`] holds one shared `rusqlite` connection
+//! behind a mutex. Wasm: [`web::WebSqliteStorage`] talks to the OPFS sqlite
+//! worker over the JSON protocol in [`protocol`], falling back to the
+//! unavailable-snapshot behavior when OPFS or the Worker API is missing.
+//! The trait is async ([`async_trait`]) because the wasm backend can only
+//! answer via worker round-trips; native bodies stay synchronous internally.
 #[cfg(not(target_family = "wasm"))]
 mod backend;
-// Target-neutral by design (the protocol tests run natively), but only the
-// wasm web backend consumes it — the test escape hatch keeps clippy's
-// dead_code from killing the native build under -D warnings.
+// Target-neutral so the protocol tests run natively; the wasm-only web
+// backend consumes it, and the test cfg keeps native builds warning-free.
 #[cfg(any(target_family = "wasm", test))]
 pub(crate) mod protocol;
 mod runtime;
@@ -46,12 +39,9 @@ pub struct StorageSnapshot {
 
 impl Global for StorageSnapshot {}
 
-/// Target-neutral storage error.
-///
-/// `rusqlite::Error` only exists natively (rusqlite is a not-wasm dep), so
-/// it is wrapped in a variant compiled out on wasm; the web backend reports
-/// its transport/OPFS/SQL failures through [`StorageError::Web`] with a
-/// human-readable message. Callers format both the same way.
+/// Target-neutral storage error. `rusqlite::Error` exists only natively, so
+/// that variant is compiled out on wasm; the web backend reports through
+/// [`StorageError::Web`]. Callers format both the same way.
 #[derive(Debug)]
 pub enum StorageError {
     /// Native SQLite failure.

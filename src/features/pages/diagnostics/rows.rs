@@ -10,9 +10,7 @@ use crate::{
 use super::row;
 
 pub fn build_diagnostic_rows(cx: &App) -> Vec<Div> {
-    // Borrow AppState instead of cloning the whole struct (it now carries
-    // notification_inbox + two permission HashSets + AppConfig). It is only
-    // read below, so a shared borrow is sufficient and lives for the function.
+    // Shared borrow: AppState carries the config, inbox, and permission sets.
     let state = cx.try_global::<app_state::AppState>();
     let lifecycle = cx
         .try_global::<LifecycleState>()

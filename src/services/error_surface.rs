@@ -1,13 +1,10 @@
-#![allow(dead_code)]
-
 use gpui::{App, BorrowAppContext, Global};
 use serde::{Deserialize, Serialize};
 
 use crate::{ids::EventId, time::AppTimestamp};
 
-// ---------------------------------------------------------------------------
-// Error categories
-// ---------------------------------------------------------------------------
+/// Cap on stored records; the newest are kept.
+const MAX_RECORDS: usize = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ErrorCategory {
@@ -30,15 +27,10 @@ impl ErrorCategory {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Error actions and records
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ErrorAction {
     Retry,
     OpenSettings,
-    CopyDetails,
     Dismiss,
 }
 
@@ -52,10 +44,7 @@ pub struct ErrorRecord {
     pub actions: Vec<ErrorAction>,
 }
 
-// ---------------------------------------------------------------------------
-// In-memory error surface state (primary store, capped at 200)
-// ---------------------------------------------------------------------------
-
+/// In-memory error surface state (primary store).
 #[derive(Clone, Debug, Default)]
 pub struct ErrorSurfaceState {
     pub records: Vec<ErrorRecord>,
@@ -74,34 +63,29 @@ pub fn report(
     actions: Vec<ErrorAction>,
     cx: &mut App,
 ) -> EventId {
+    // Error text reaches the screen, the sqlite log, and crash reports — scrub
+    // home paths so none of them leak the local username.
+    let message = scrub_home(&message.into());
     let record = ErrorRecord {
         id: EventId::new(),
         occurred_at: AppTimestamp::now(),
         severity,
         category,
-        message: message.into(),
+        message,
         actions,
     };
     let id = record.id;
     let record_clone = record.clone();
-    let message_str = record.message.clone();
 
-    // Track the error message so the panic handler can attach it to crash reports.
-    crate::lifecycle::track_recent_error(message_str);
+    // The panic handler attaches recent messages to crash reports.
+    crate::lifecycle::track_recent_error(record.message.clone());
 
     cx.update_global::<ErrorSurfaceState, _>(|state, _cx| {
         state.records.insert(0, record);
-        if state.records.len() > 200 {
-            state.records.truncate(200);
-        }
+        state.records.truncate(MAX_RECORDS);
 
-        // Persist to the storage backend as a secondary store. Only the
-        // in-memory mutation above must happen synchronously — the INSERT is
-        // dispatched to a spawned task so the UI thread never blocks on
-        // database I/O (mirrors the storage runtime pattern in
-        // `services/storage/runtime.rs`). Native runs it on the background
-        // executor (synchronous SQLite); wasm awaits the OPFS worker reply
-        // on the foreground executor (message-passing, non-blocking).
+        // The in-memory mutation stays synchronous; the INSERT is dispatched so
+        // the UI thread never blocks on database I/O (native: bg executor, wasm: OPFS).
         if let Some(runtime) = _cx.try_global::<crate::storage::StorageRuntime>() {
             let backend = runtime.backend.clone();
             #[cfg(not(target_family = "wasm"))]
@@ -133,10 +117,6 @@ pub fn report(
     id
 }
 
-pub fn snapshot(cx: &App) -> Vec<ErrorRecord> {
-    cx.global::<ErrorSurfaceState>().records.clone()
-}
-
 /// Returns the number of error records without cloning the records Vec.
 pub fn record_count(cx: &App) -> usize {
     cx.try_global::<ErrorSurfaceState>()
@@ -161,34 +141,30 @@ pub fn dismiss(id: EventId, cx: &mut App) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Storage persistence (secondary store)
-// ---------------------------------------------------------------------------
-
-/// Persist a single error record to the `error_log` table.
-///
-/// The `error_log` table migration is defined in `db_migrations` (version 2)
-/// and mirrored by the wasm OPFS worker. If the table does not exist yet
-/// this call fails and the in-memory store remains authoritative.
-pub async fn persist_error(
+/// Persist a single error record to the `error_log` table. If the table does
+/// not exist yet this fails and the in-memory store remains authoritative.
+async fn persist_error(
     db: &dyn crate::storage::StorageBackend,
     error: &ErrorRecord,
 ) -> Result<(), crate::storage::StorageError> {
     db.persist_error_record(error).await
 }
 
-/// Load the most recent `limit` error records from storage, ordered by
-/// occurrence time descending (newest first).
-pub async fn load_error_history(
-    db: &dyn crate::storage::StorageBackend,
-    limit: usize,
-) -> Result<Vec<ErrorRecord>, crate::storage::StorageError> {
-    db.load_error_history(limit).await
+/// Replace home-dir prefixes with `~` (error messages may embed io paths).
+fn scrub_home(text: &str) -> String {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    scrub_home_with(text, &home)
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+fn scrub_home_with(text: &str, home: &str) -> String {
+    if home.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(home, "~")
+    }
+}
 
 #[cfg(test)]
 #[path = "error_surface.test.rs"]

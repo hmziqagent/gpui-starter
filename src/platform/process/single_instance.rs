@@ -1,9 +1,5 @@
-// Native: single-instance lock via `single-instance` + interprocess local
-// sockets (deep-link / typed-command forwarding between instances).
-//
-// Wasm: there is exactly one "instance" per browser tab and no OS-level
-// single-instance concept — `preflight()` always reports `should_start`,
-// `install`/`shutdown` are capability bookkeeping no-ops.
+// Native: single-instance lock + local-socket forwarding between instances.
+// Wasm has one instance per tab, so `preflight()` always reports start.
 
 #[cfg(not(target_family = "wasm"))]
 pub use native::{Preflight, SingleInstanceRuntime, install, preflight, shutdown};
@@ -11,21 +7,24 @@ pub use native::{Preflight, SingleInstanceRuntime, install, preflight, shutdown}
 // Test-only internals (the ipc round-trip tests exercise these directly).
 #[cfg(all(test, not(target_family = "wasm")))]
 pub(crate) use native::{
-    SCHEME, append_forwarded_link, drain_forwarded_links, resolve_ipc_name,
-    send_forwarded_link_via_ipc,
+    MAX_LINE_BYTES, SCHEME, append_forwarded_link, drain_forwarded_links, read_bounded_line,
+    resolve_ipc_name, send_forwarded_link_via_ipc,
 };
 
 #[cfg(not(target_family = "wasm"))]
 mod native {
     use std::{
         fs,
-        io::{BufRead, BufReader, Write},
+        io::{BufRead, BufReader, Read, Write},
         path::PathBuf,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
         },
     };
+
+    #[cfg(target_family = "unix")]
+    use std::os::unix::fs::OpenOptionsExt as _;
 
     use gpui::{App, Global};
     use interprocess::local_socket::{
@@ -43,11 +42,17 @@ mod native {
     const INSTANCE_NAME: &str = "com.gpui-starter.app.instance";
     const LOG: &str = "gpui_starter::single_instance";
     pub(crate) const SCHEME: &str = "gpui-starter://";
+    // Deep links and typed commands are tiny; anything longer is hostile or
+    // corrupt, so the reader stops at this cap instead of growing unbounded.
+    pub(crate) const MAX_LINE_BYTES: usize = 16 * 1024;
+    // Backpressure between the blocking listener thread and the UI task: a
+    // local flood must hit a bounded queue, not grow memory.
+    const FORWARD_QUEUE_CAP: usize = 64;
 
     pub struct SingleInstanceRuntime {
         _instance: SingleInstance,
-        ipc_name: String,
-        queue_file: PathBuf,
+        ipc_name: Option<String>,
+        queue_file: Option<PathBuf>,
         /// Filesystem path of the forwarder socket, if a namespaced socket is
         /// unavailable. Stored so a [`Drop`] impl can remove a stale socket.
         socket_path: Option<PathBuf>,
@@ -56,14 +61,12 @@ mod native {
 
     impl Drop for SingleInstanceRuntime {
         fn drop(&mut self) {
-            // Signal the blocking listener thread to exit, then remove the
-            // stale socket file (RAII). A leftover socket causes the next
-            // `Stream::connect` to succeed against a dead listener or, for
-            // filesystem sockets, refuses the connection entirely — so this
-            // probe+cleanup is essential for a clean restart (especially the
-            // exec-reload path, which re-launches immediately).
+            // Wake the listener so it observes the flag, then remove the
+            // socket file a leftover would break the next startup with.
             self.ipc_running.store(false, Ordering::SeqCst);
-            let _ = send_forwarded_link_via_ipc(&self.ipc_name, "__shutdown__");
+            if let Some(ipc_name) = &self.ipc_name {
+                let _ = send_forwarded_link_via_ipc(ipc_name, "__shutdown__");
+            }
             if let Some(path) = &self.socket_path
                 && path.exists()
             {
@@ -100,18 +103,18 @@ mod native {
         };
 
         if instance.is_single() {
-            if let Some(parent) = queue_file.parent() {
-                let _ = fs::create_dir_all(parent);
+            if let Some(path) = &queue_file {
+                if let Some(parent) = path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::remove_file(path);
             }
-            let _ = fs::remove_file(&queue_file);
-            // Best-effort stale-socket probe: if a filesystem socket from a
-            // crashed previous run is still present, probe its liveness and
-            // remove it when no listener answers. A namespaced socket has no
-            // filesystem path, so this is a no-op there.
-            let socket_path = filesystem_socket_path(&ipc_name);
+            // Probe a filesystem socket left by a crashed run and remove it
+            // when nothing answers; namespaced sockets have no file to clean.
+            let socket_path = filesystem_socket_path(ipc_name.as_deref());
             if let Some(path) = &socket_path
                 && path.exists()
-                && !is_socket_live(&ipc_name)
+                && !is_socket_live(ipc_name.as_deref())
             {
                 let _ = fs::remove_file(path);
                 tracing::warn!(
@@ -132,15 +135,30 @@ mod native {
                 initial_deep_link: deep_link,
             }
         } else {
-            if let Some(link) = deep_link
-                && let Err(err) = send_forwarded_link_via_ipc(&ipc_name, &link)
-            {
-                tracing::warn!(
-                    target: LOG,
-                    error = %err,
-                    "ipc forward failed; falling back to queue file"
-                );
-                append_forwarded_link(&queue_file, &link);
+            if let Some(link) = deep_link {
+                match ipc_name
+                    .as_deref()
+                    .map(|name| send_forwarded_link_via_ipc(name, &link))
+                {
+                    Some(Ok(())) => {}
+                    Some(Err(err)) => {
+                        tracing::warn!(
+                            target: LOG,
+                            error = %err,
+                            "ipc forward failed; falling back to queue file"
+                        );
+                        if let Some(queue) = &queue_file {
+                            append_forwarded_link(queue, &link);
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            target: LOG,
+                            link = %truncate_for_log(&link),
+                            "no safe ipc socket path available; deep link dropped"
+                        );
+                    }
+                }
             }
             Preflight {
                 should_start: false,
@@ -165,15 +183,17 @@ mod native {
         let ipc_name = runtime.ipc_name.clone();
         let ipc_running = runtime.ipc_running.clone();
         cx.set_global(runtime);
-        let ipc_ok = start_ipc_forwarder(ipc_name, ipc_running, cx);
-        if !ipc_ok {
+        if !start_ipc_forwarder(ipc_name, ipc_running, cx) {
             crate::capabilities::set(
                 "second_instance_forwarding",
                 crate::capabilities::CapabilityStatus {
                     supported: true,
                     enabled: true,
                     degraded: true,
-                    reason: Some("ipc forwarding unavailable; using queue-file fallback".into()),
+                    reason: Some(
+                        "ipc forwarding unavailable; queue-file fallback only when app dirs exist"
+                            .into(),
+                    ),
                     last_error: Some("failed to initialize local-socket listener".into()),
                 },
                 cx,
@@ -185,12 +205,17 @@ mod native {
     pub fn shutdown(cx: &mut App) {
         if let Some(runtime) = cx.try_global::<SingleInstanceRuntime>() {
             runtime.ipc_running.store(false, Ordering::SeqCst);
-            // Nudge the blocking listener accept loop so it can observe `ipc_running = false`.
-            let _ = send_forwarded_link_via_ipc(&runtime.ipc_name, "__shutdown__");
+            if let Some(ipc_name) = &runtime.ipc_name {
+                let _ = send_forwarded_link_via_ipc(ipc_name, "__shutdown__");
+            }
         }
     }
 
-    fn start_forwarded_link_poller(queue_file: PathBuf, cx: &mut App) {
+    fn start_forwarded_link_poller(queue_file: Option<PathBuf>, cx: &mut App) {
+        let Some(queue_file) = queue_file else {
+            tracing::info!(target: LOG, "no app dirs; queue-file fallback disabled");
+            return;
+        };
         tracing::info!(target: LOG, queue = %queue_file.display(), "starting deep-link forwarder poller");
         let bg = cx.background_executor().clone();
         cx.spawn(async move |cx| {
@@ -211,11 +236,16 @@ mod native {
         .detach();
     }
 
-    fn start_ipc_forwarder(ipc_name: String, ipc_running: Arc<AtomicBool>, cx: &mut App) -> bool {
-        // flume unbounded channel: the blocking listener thread pushes raw
-        // received lines; the gpui task drains them reactively via recv_async,
-        // replacing the legacy 180ms polling loop.
-        let (tx, rx) = flume::unbounded::<ForwardedPayload>();
+    fn start_ipc_forwarder(
+        ipc_name: Option<String>,
+        ipc_running: Arc<AtomicBool>,
+        cx: &mut App,
+    ) -> bool {
+        let Some(ipc_name) = ipc_name else {
+            tracing::warn!(target: LOG, "no safe socket path; ipc forwarding disabled");
+            return false;
+        };
+        let (tx, rx) = flume::bounded::<ForwardedPayload>(FORWARD_QUEUE_CAP);
         let ipc_name_for_thread = ipc_name.clone();
         let thread = std::thread::Builder::new()
             .name("gpui-ipc-forwarder".to_string())
@@ -249,37 +279,41 @@ mod native {
                     let Ok(mut conn) = conn else {
                         continue;
                     };
-                    let line = {
-                        let mut reader = BufReader::new(&conn);
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).is_err() {
-                            String::new()
-                        } else {
-                            line
-                        }
+                    if !peer_is_same_user(&conn) {
+                        tracing::warn!(target: LOG, "ipc client failed same-user check; dropped");
+                        continue;
+                    }
+                    let Some(trimmed) = read_bounded_line(&conn) else {
+                        continue;
                     };
-                    let trimmed = line.trim().to_string();
                     if trimmed.is_empty() || trimmed == "__shutdown__" {
                         continue;
                     }
-                    // Typed protocol: decode a ForwardedRequest, emit the
-                    // command to the gpui task, and write a typed
-                    // ForwardedResponse back on the same connection so the
-                    // caller gets synchronous ok/err.
                     if let Some(req) = decode_request(&trimmed) {
                         let id = req.id;
-                        let _ = tx.send(ForwardedPayload::Request(req));
-                        // Best-effort response: dispatch never fails to
-                        // receive (the gpui task owns the rx), so report ok.
-                        let resp = ForwardedResponse::ok(id);
+                        // A full queue means the UI task is wedged: report the
+                        // failure instead of pretending the command was taken.
+                        let accepted = tx.try_send(ForwardedPayload::Request(req)).is_ok();
+                        let resp = if accepted {
+                            ForwardedResponse::ok(id)
+                        } else {
+                            ForwardedResponse::error(id, "primary instance is busy; retry")
+                        };
                         if let Ok(encoded) = encode_line(&resp) {
                             let _ = conn.write_all(encoded.as_bytes());
                         }
                     } else if trimmed.starts_with(SCHEME) {
-                        // Legacy raw deep-link line — backward compatibility
-                        // with older second instances that did not use the
-                        // typed layer.
-                        let _ = tx.send(ForwardedPayload::DeepLink(trimmed));
+                        // Legacy raw deep-link line: no response channel exists,
+                        // so a full queue is logged, not silently dropped.
+                        if let Err(flume::TrySendError::Full(ForwardedPayload::DeepLink(link))) =
+                            tx.try_send(ForwardedPayload::DeepLink(trimmed))
+                        {
+                            tracing::warn!(
+                                target: LOG,
+                                link = %truncate_for_log(&link),
+                                "forward queue full; dropped legacy deep link"
+                            );
+                        }
                     } else {
                         tracing::debug!(
                             target: LOG,
@@ -294,7 +328,6 @@ mod native {
             return false;
         }
 
-        // Reactive drain: recv_async replaces the 180ms timer poll.
         cx.spawn(async move |cx| {
             loop {
                 let payload = match rx.recv_async().await {
@@ -326,10 +359,36 @@ mod native {
 
     /// Payload pushed from the blocking forwarder thread to the gpui task.
     enum ForwardedPayload {
-        /// Typed request decoded from the typed IPC protocol.
         Request(ForwardedRequest),
         /// Legacy raw deep-link line (starts with the app scheme).
         DeepLink(String),
+    }
+
+    /// Drop connections from other users where the OS exposes peer creds;
+    /// no cred support stays accepted (UI commands only, user-owned socket).
+    #[cfg(target_family = "unix")]
+    fn peer_is_same_user(conn: &Stream) -> bool {
+        match conn.peer_creds().ok().and_then(|creds| creds.euid()) {
+            Some(euid) => euid == unsafe { libc::geteuid() },
+            None => true,
+        }
+    }
+
+    #[cfg(not(target_family = "unix"))]
+    fn peer_is_same_user(_conn: &Stream) -> bool {
+        true
+    }
+
+    /// Read one newline-terminated frame, capped at [`MAX_LINE_BYTES`].
+    /// Returns `None` on EOF, read errors, or an unterminated oversized line.
+    pub(crate) fn read_bounded_line(conn: &Stream) -> Option<String> {
+        let mut reader = BufReader::new(conn);
+        let mut line = String::new();
+        let mut limited = (&mut reader).take(MAX_LINE_BYTES as u64 + 1);
+        match limited.read_line(&mut line) {
+            Ok(n) if n > 0 && line.ends_with('\n') => Some(line.trim().to_string()),
+            _ => None,
+        }
     }
 
     pub(crate) fn append_forwarded_link(path: &PathBuf, link: &str) {
@@ -337,7 +396,13 @@ mod native {
             let _ = fs::create_dir_all(parent);
         }
 
-        match fs::OpenOptions::new().create(true).append(true).open(path) {
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        // Don't create the queue world-readable; content is app-scheme URLs.
+        #[cfg(target_family = "unix")]
+        options.mode(0o600);
+
+        match options.open(path) {
             Ok(mut file) => {
                 let _ = writeln!(file, "{link}");
             }
@@ -348,7 +413,6 @@ mod native {
     }
 
     /// Send a single deep-link to the primary instance over a local socket.
-    /// Synchronous counterpart of `crate::ipc::IpcEndpoint::send`.
     pub(crate) fn send_forwarded_link_via_ipc(
         ipc_name: &str,
         link: &str,
@@ -365,7 +429,9 @@ mod native {
         if content.trim().is_empty() {
             return Vec::new();
         }
-        let _ = fs::write(path, "");
+        // Remove instead of truncating: a symlink planted on the path must not
+        // have its target clobbered; the next append recreates the file.
+        let _ = fs::remove_file(path);
         content
             .lines()
             .map(str::trim)
@@ -374,17 +440,17 @@ mod native {
             .collect()
     }
 
-    fn queue_file_path() -> PathBuf {
-        if let Some(project_dirs) = crate::platform::filesystem::paths::project_dirs() {
-            let dir = project_dirs.cache_dir().join("runtime");
-            return dir.join("forwarded-deep-links.queue");
-        }
-        std::env::temp_dir().join("gpui-starter-forwarded-deep-links.queue")
+    /// Queue lives in the user-owned cache dir; no temp-dir fallback, since a
+    /// predictable world-writable path invites symlink attacks.
+    fn queue_file_path() -> Option<PathBuf> {
+        crate::platform::filesystem::paths::project_dirs().map(|dirs| {
+            dirs.cache_dir()
+                .join("runtime")
+                .join("forwarded-deep-links.queue")
+        })
     }
 
-    /// Resolve a platform-appropriate local-socket name.
-    /// Mirrors `crate::ipc::IpcEndpoint::resolve_name`; kept here for the
-    /// synchronous code path. Prefer `IpcEndpoint` for async callers.
+    /// Resolve a platform-appropriate local-socket name for the sync path.
     pub(crate) fn resolve_ipc_name<'a>(
         ipc_name: &'a str,
     ) -> std::io::Result<interprocess::local_socket::Name<'a>> {
@@ -395,49 +461,105 @@ mod native {
         }
     }
 
-    fn ipc_name() -> String {
+    fn ipc_name() -> Option<String> {
         if GenericNamespaced::is_supported() {
-            "com.gpui-starter.app.forwarder".to_string()
-        } else {
-            queue_file_path()
-                .with_extension("sock")
-                .display()
-                .to_string()
+            return Some("com.gpui-starter.app.forwarder".to_string());
+        }
+        // Prefer the user-owned cache dir; the no-XDG fallback is an
+        // app-owned 0700 runtime dir, never a predictable $TMPDIR socket.
+        queue_file_path()
+            .map(|queue| queue.with_extension("sock"))
+            .or_else(|| fallback_runtime_dir().map(|dir| dir.join("forwarder.sock")))
+            .map(|path| path.display().to_string())
+    }
+
+    /// 0700 uid-scoped dir under the temp root: another user cannot
+    /// pre-create it or write into it. `None` disables forwarding.
+    fn fallback_runtime_dir() -> Option<PathBuf> {
+        #[cfg(target_family = "unix")]
+        let stem = format!("gpui-starter-{}", unsafe { libc::geteuid() });
+        #[cfg(not(target_family = "unix"))]
+        let stem = "gpui-starter-runtime".to_string();
+        let dir = std::env::temp_dir().join(stem);
+
+        #[cfg(target_family = "unix")]
+        let created = {
+            use std::os::unix::fs::DirBuilderExt as _;
+            fs::DirBuilder::new().mode(0o700).create(&dir)
+        };
+        #[cfg(not(target_family = "unix"))]
+        let created = fs::DirBuilder::new().create(&dir);
+
+        match created {
+            Ok(()) => Some(dir),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::AlreadyExists
+                    && runtime_dir_is_app_owned(&dir) =>
+            {
+                Some(dir)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: LOG,
+                    path = %dir.display(),
+                    error = %err,
+                    "unusable or unsafe temp runtime dir; ipc forwarding disabled"
+                );
+                None
+            }
         }
     }
 
-    /// Return the filesystem path the forwarder socket uses, but only when
-    /// namespaced sockets are unavailable (so the socket is a real file that
-    /// can go stale). On Linux abstract sockets there is no file to clean up.
-    fn filesystem_socket_path(ipc_name: &str) -> Option<PathBuf> {
+    /// Must be a real dir (not a symlink) owned by this uid with no
+    /// group/other write bits, or it could host a squatted socket.
+    #[cfg(target_family = "unix")]
+    fn runtime_dir_is_app_owned(dir: &std::path::Path) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        match fs::symlink_metadata(dir) {
+            Ok(meta) => {
+                meta.is_dir()
+                    && meta.uid() == unsafe { libc::geteuid() }
+                    && meta.mode() & 0o022 == 0
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(target_family = "unix"))]
+    fn runtime_dir_is_app_owned(_dir: &std::path::Path) -> bool {
+        true
+    }
+
+    /// Log-friendly prefix of a forwarded payload; URLs can carry long params.
+    fn truncate_for_log(payload: &str) -> String {
+        payload.chars().take(128).collect()
+    }
+
+    /// Filesystem path of the forwarder socket, but only when namespaced
+    /// sockets are unavailable (no file to clean up for abstract sockets).
+    fn filesystem_socket_path(ipc_name: Option<&str>) -> Option<PathBuf> {
         if GenericNamespaced::is_supported() {
             None
         } else {
-            Some(PathBuf::from(ipc_name))
+            ipc_name.map(PathBuf::from)
         }
     }
 
     /// Probe whether a listener is currently answering on the forwarder socket.
-    /// Returns `true` if a connection is accepted (a live primary is running),
-    /// `false` otherwise (the socket is stale/abandoned).
-    fn is_socket_live(ipc_name: &str) -> bool {
-        match resolve_ipc_name(ipc_name) {
-            Ok(name) => Stream::connect(name).is_ok(),
-            Err(_) => false,
+    fn is_socket_live(ipc_name: Option<&str>) -> bool {
+        match ipc_name.map(resolve_ipc_name).transpose() {
+            Ok(Some(name)) => Stream::connect(name).is_ok(),
+            _ => false,
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Wasm stubs — one instance per browser tab; nothing to lock or forward.
-// ---------------------------------------------------------------------------
 
 #[cfg(target_family = "wasm")]
 mod wasm {
     use gpui::{App, Global};
 
-    /// Unit runtime: no lock, no IPC — exists so callers (main entry) keep a
-    /// uniform `install(runtime, cx)` shape.
+    /// Unit runtime: no lock, no IPC — keeps the uniform `install(runtime, cx)`
+    /// shape for callers.
     pub struct SingleInstanceRuntime;
 
     impl Global for SingleInstanceRuntime {}

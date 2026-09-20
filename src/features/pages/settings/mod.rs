@@ -48,7 +48,6 @@ impl SettingsPage {
                         this.event_log.push(desc);
                     }
                 }
-                // Keep only last 20 entries
                 if this.event_log.len() > 20 {
                     let drain = this.event_log.len() - 20;
                     this.event_log.drain(0..drain);
@@ -84,7 +83,6 @@ impl Render for SettingsPage {
                     .font_weight(FontWeight::BOLD)
                     .child(crate::i18n::localize("settings_title", None)),
             )
-            // Dark mode toggle
             .child(
                 div()
                     .flex()
@@ -105,7 +103,6 @@ impl Render for SettingsPage {
                         },
                     )),
             )
-            // Language selection
             .child(
                 div()
                     .flex()
@@ -140,26 +137,17 @@ impl Render for SettingsPage {
                             ),
                     ),
             )
-            // Native local notifications
             .child(notifications_section::render_notifications_section(
                 &notifications_snapshot,
                 cx,
             ))
-            // Shortcuts
             .child(dev_sections::render_shortcuts_section(&app_config, cx))
-            // Storage
             .child(dev_sections::render_storage_section(cx))
-            // Developer
             .child(dev_sections::render_developer_section(&app_config, cx))
-            // Desktop Actions
             .child(dev_sections::render_desktop_actions_section(cx))
-            // Telemetry
             .child(dev_sections::render_telemetry_section(cx))
-            // Telemetry Runtime
             .child(dev_sections::render_telemetry_runtime_section(cx))
-            // Connectivity + Session + Secure storage dev controls
             .child(dev_sections::render_runtime_boundaries_section(cx))
-            // -- Event Emitter --
             .child(dev_sections::render_event_emitter_section(
                 &self.event_log,
                 cx,

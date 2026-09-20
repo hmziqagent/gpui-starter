@@ -20,6 +20,8 @@ impl Default for AccessibilitySnapshot {
 impl Global for AccessibilitySnapshot {}
 
 pub fn initialize(cx: &mut App) {
+    // Keep a direct accesskit symbol reference so the dep stays linked even
+    // if no bridge code runs yet.
     let _role = accesskit::Role::Window;
     let snapshot = AccessibilitySnapshot::default();
     crate::capabilities::set(

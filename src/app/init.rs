@@ -9,11 +9,7 @@ use crate::app::theme::set_theme_mode;
 // Init
 // ---------------------------------------------------------------------------
 
-/// Time and log a named startup step.
-///
-/// Records the step via [`crate::lifecycle::set_startup_step`], runs `$body`,
-/// then emits a tracing log whose name always matches the step. Bundling the
-/// timing with the name removes the hazard of the two drifting apart.
+/// Time and log a named startup step; the log name always matches the step.
 macro_rules! startup_step {
     ($cx:expr, $name:expr, $body:block) => {{
         crate::lifecycle::set_startup_step($name, $cx);
@@ -33,9 +29,8 @@ pub fn init(cx: &mut App) {
     // clock (not std::time): Instant::now panics at runtime on wasm.
     let startup_start = crate::platform::clock::Instant::now();
 
-    // Wasm: the text system starts with an EMPTY font database (no system
-    // fonts in a browser tab); register the embedded fonts BEFORE anything
-    // can lay out text, or the first render panics in `resolve_font`.
+    // Wasm: register embedded fonts before any text layout, or the first
+    // render panics in `resolve_font` (browser tabs have no system fonts).
     #[cfg(target_family = "wasm")]
     {
         let fonts = crate::app::assets::embedded_font_bytes();
@@ -57,18 +52,7 @@ pub fn init(cx: &mut App) {
 
     crate::lifecycle::install_panic_hook();
 
-    // Crash marker: write on startup, detect previous crash
-    crate::lifecycle::write_crash_marker();
-    let previous_crash = crate::lifecycle::check_previous_crash();
-    if let Some(marker) = &previous_crash {
-        tracing::warn!(
-            target: "gpui_starter::lifecycle",
-            marker = %marker,
-            "previous crash detected"
-        );
-    }
-
-    // Must be called before using any gpui-component features
+    // Must precede any gpui-component usage.
     startup_step!(cx, "component_init", {
         gpui_component::init(cx);
     });
@@ -78,8 +62,19 @@ pub fn init(cx: &mut App) {
         crate::app_state::initialize(cx);
     });
 
-    // Set the data directory for the panic hook crash report writer.
+    // Marker data must be user-owned, never $TMPDIR (symlink planting);
+    // install it before the marker write so startup crashes stay detectable.
     crate::lifecycle::set_app_data_dir(crate::app_state::paths(cx).data_dir.clone());
+    // Detect the previous run's marker BEFORE writing this launch's own.
+    let previous_crash = crate::lifecycle::check_previous_crash();
+    if let Some(marker) = &previous_crash {
+        tracing::warn!(
+            target: "gpui_starter::lifecycle",
+            marker = %marker,
+            "previous crash detected"
+        );
+    }
+    crate::lifecycle::write_crash_marker();
 
     startup_step!(cx, "logging_init", {
         crate::logging::initialize(cx);
@@ -133,36 +128,39 @@ pub fn init(cx: &mut App) {
     };
     set_locale(&locale_to_use, cx);
 
-    // Load extra themes from the themes/ directory (with hot-reload).
-    // Native uses the filesystem watcher; wasm has no `watch_dir` (and no
-    // writable themes dir) — themes come from the embedded asset source and
-    // the persisted theme is applied directly if registered.
+    // Embedded themes are the bundle's only portable theme source; they
+    // register before any registry lookup, on native and wasm alike.
     let persisted_theme = persisted.theme.clone();
-    #[cfg(not(target_family = "wasm"))]
-    if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
-        std::path::PathBuf::from(format!("{}/themes", env!("CARGO_MANIFEST_DIR"))),
-        cx,
-        move |cx| {
-            if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
-                .themes()
-                .get(persisted_theme.as_str())
-                .cloned()
-            {
-                gpui_component::Theme::global_mut(cx).apply_config(&theme);
-            }
-        },
-    ) {
-        tracing::error!("Failed to watch themes directory: {}", err);
-        crate::lifecycle::set_startup_error(format!("theme watch failed: {err}"), cx);
-    }
-
-    #[cfg(target_family = "wasm")]
+    crate::app::theme::register_embedded_themes(cx);
     if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
         .themes()
         .get(persisted_theme.as_str())
         .cloned()
     {
         gpui_component::Theme::global_mut(cx).apply_config(&theme);
+    }
+
+    // Hot reload of themes/ is dev-checkout-only: the watcher create_dir_all()s
+    // missing dirs, so never point it at a path that should not exist.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let themes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes");
+        if themes_dir.exists() {
+            // watch_dir never returns Err (it logs internally); on_load
+            // re-registers embedded themes after the initial reload.
+            let _ = gpui_component::ThemeRegistry::watch_dir(
+                themes_dir,
+                cx,
+                crate::app::theme::register_embedded_themes,
+            );
+
+            // Watcher reloads clear the registry without re-running on_load,
+            // so a deleted dev theme file must not strand the embedded set.
+            cx.observe_global::<gpui_component::ThemeRegistry>(|cx| {
+                crate::app::theme::ensure_embedded_themes(cx);
+            })
+            .detach();
+        }
     }
 
     if let Some(show) = persisted.scrollbar_show {
@@ -216,9 +214,7 @@ pub fn init(cx: &mut App) {
         crate::session::initialize(cx);
         crate::storage::initialize(cx);
 
-        // Run database migrations after storage is initialized.
-        // (SQLite is native-only; wasm storage is always unavailable, so the
-        // snapshot.available guard below never passes there.)
+        // SQLite is native-only; wasm storage is never available.
         #[cfg(not(target_family = "wasm"))]
         {
             crate::lifecycle::set_startup_step("db_migrations", cx);
@@ -276,10 +272,8 @@ pub fn init(cx: &mut App) {
     crate::services::updater::initialize(cx);
     crate::services::updater::check_pending_swap(cx);
 
-    // Wasm: browser integration bridges — hash deep links (router +
-    // history), the favicon/document.title tray-equivalent, and the
-    // navigator.onLine connectivity listeners. Installs after the observed
-    // globals (inbox, connectivity, config) exist; native builds skip it.
+    // Wasm bridges (hash router, favicon/title, connectivity) install after
+    // the globals they observe exist; native builds skip this.
     #[cfg(target_family = "wasm")]
     startup_step!(cx, "web_integrations", {
         crate::platform::web::install(cx);
@@ -301,9 +295,7 @@ pub fn init(cx: &mut App) {
         crate::lifecycle::set_shutdown_step("begin_shutdown", cx);
         crate::lifecycle::set_stage(crate::lifecycle::LifecycleStage::ShuttingDown, cx);
 
-        // Flush any debounced window bounds before shutdown so the final
-        // position is persisted even if the config-store debounce (~300 ms)
-        // has not fired yet.
+        // Persist the final window position even if the debounce has not fired.
         crate::lifecycle::set_shutdown_step("flush_window_bounds", cx);
         crate::root::flush_window_bounds(cx);
 
@@ -343,10 +335,8 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &Restart, cx| {
-        // Set the reload-requested flag (read post-run by main to re-exec),
-        // then reuse the full Quit shutdown path so the single-instance lock,
-        // config flush, telemetry drain, etc. all run before the process
-        // exits. The flag is an AtomicBool that survives the shutdown.
+        // Flag the re-exec, then reuse the full Quit shutdown path so every
+        // flush runs before the process exits.
         #[cfg(unix)]
         {
             crate::app::request_reload();
