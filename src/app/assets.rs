@@ -30,6 +30,22 @@ pub fn embedded_font_bytes() -> Vec<Cow<'static, [u8]>> {
         .collect()
 }
 
+/// (file name, JSON) of every theme embedded from themes/. Release builds
+/// have no themes/ checkout on disk, so this is the bundle's theme source.
+pub fn embedded_themes() -> Vec<(SharedString, String)> {
+    ProjectAssets::iter()
+        .filter(|path| path.ends_with(".json"))
+        .filter_map(|path| {
+            ProjectAssets::get(&path).map(|file| {
+                (
+                    SharedString::from(path.into_owned()),
+                    String::from_utf8_lossy(&file.data).into_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// A merged [`AssetSource`] combining gpui-kit assets with project assets.
 pub struct CombinedAssets {
     component: gpui_kit_assets::Assets,

@@ -128,33 +128,39 @@ pub fn init(cx: &mut App) {
     };
     set_locale(&locale_to_use, cx);
 
-    // Hot-reload themes/ (native); wasm applies the persisted theme directly.
+    // Embedded themes are the bundle's only portable theme source; they
+    // register before any registry lookup, on native and wasm alike.
     let persisted_theme = persisted.theme.clone();
-    #[cfg(not(target_family = "wasm"))]
-    if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
-        std::path::PathBuf::from(format!("{}/themes", env!("CARGO_MANIFEST_DIR"))),
-        cx,
-        move |cx| {
-            if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
-                .themes()
-                .get(persisted_theme.as_str())
-                .cloned()
-            {
-                gpui_component::Theme::global_mut(cx).apply_config(&theme);
-            }
-        },
-    ) {
-        tracing::error!("Failed to watch themes directory: {}", err);
-        crate::lifecycle::set_startup_error(format!("theme watch failed: {err}"), cx);
-    }
-
-    #[cfg(target_family = "wasm")]
+    crate::app::theme::register_embedded_themes(cx);
     if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
         .themes()
         .get(persisted_theme.as_str())
         .cloned()
     {
         gpui_component::Theme::global_mut(cx).apply_config(&theme);
+    }
+
+    // Hot reload of themes/ is a dev-checkout convenience. The 0.6.1 watcher
+    // create_dir_all()s a missing dir, so only an existing dir is watched;
+    // release installs have no checkout and skip this without an error.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let themes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes");
+        if themes_dir.exists() {
+            if let Err(err) = gpui_component::ThemeRegistry::watch_dir(
+                themes_dir,
+                cx,
+                // The initial reload clears the registry; re-register the
+                // embedded set so it survives alongside the dir's themes.
+                crate::app::theme::register_embedded_themes,
+            ) {
+                tracing::warn!(
+                    target: "gpui_starter::startup",
+                    error = %err,
+                    "theme hot-reload unavailable"
+                );
+            }
+        }
     }
 
     if let Some(show) = persisted.scrollbar_show {
