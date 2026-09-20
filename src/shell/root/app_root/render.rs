@@ -21,6 +21,12 @@ use super::state::AppRoot;
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui has no a11y activation callback (it refreshes the window on AT
+        // connect/disconnect); deferred so refresh runs at App level.
+        if window.is_a11y_active() != crate::accessibility::snapshot(cx).bridge_enabled {
+            cx.defer(crate::accessibility::refresh);
+        }
+
         // clock (not std::time): Instant::now panics at runtime on wasm.
         let render_started = crate::platform::clock::Instant::now();
         let sheet_layer = gpui_component::Root::render_sheet_layer(window, cx);
