@@ -1,11 +1,11 @@
 {
-  "version": "0.2.2",
-  "release_notes": "**Full Changelog**: https://github.com/hmziqagent/gpui-starter/compare/v0.2.1...v0.2.2\n\n**Full Changelog**: https://github.com/hmziqagent/gpui-starter/compare/v0.2.1...v0.2.2",
+  "version": "0.2.3",
+  "release_notes": "**Full Changelog**: https://github.com/hmziqagent/gpui-starter/compare/v0.2.1...v0.2.3",
   "platforms": {
     "macos-aarch64": {
-      "url": "https://github.com/hmziqagent/gpui-starter/releases/download/v0.2.2/GPUI-Starter-0.2.2.dmg",
+      "url": "https://github.com/hmziqagent/gpui-starter/releases/download/v0.2.3/GPUI-Starter-0.2.3.dmg",
       "signature": "",
-      "size": 35417705
+      "size": 36048535
     }
   }
 }
