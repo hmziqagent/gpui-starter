@@ -1,28 +1,17 @@
 use gpui::{prelude::*, *};
-use gpui_component::{WindowExt as _, button::Button, label::Label};
+use gpui_component::{WindowExt as _, button::Button};
 
-use crate::accessibility::A11yExt as _;
 use crate::connectivity;
 use crate::desktop_actions;
 use crate::secure_storage;
 use crate::session::{self, SessionState};
-
-/// Card section title: a level-2 heading node, since `Label` text alone
-/// produces no accessibility node.
-fn section_heading(id: &'static str, title: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .a11y(Role::Heading, title)
-        .aria_level(2)
-        .child(Label::new(title))
-}
 
 /// Renders the "Desktop Actions" settings card.
 pub fn render_desktop_actions_section(
     cx: &mut Context<super::super::SettingsPage>,
 ) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(section_heading(
+        .child(super::section_heading(
             "settings-desktop-actions-title",
             "Desktop Actions",
         ))
@@ -133,7 +122,7 @@ pub fn render_runtime_boundaries_section(
     cx: &mut Context<super::super::SettingsPage>,
 ) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(section_heading(
+        .child(super::section_heading(
             "settings-runtime-boundaries-title",
             "Runtime Boundaries",
         ))

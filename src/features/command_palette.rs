@@ -174,6 +174,18 @@ impl Render for Launcher {
             })
             .collect();
 
+        let status_text = if has_results {
+            format!("{filtered_count} results")
+        } else {
+            "No results".to_string()
+        };
+        // The live-region label must change only when the selection or the
+        // filtered set changes, or every keystroke would be announced.
+        let status_label = match rows.iter().find(|(ix, _, _, _)| *ix == selected) {
+            Some((_, _, title, _)) => format!("{title}, {} of {}", selected + 1, filtered_count),
+            None => status_text.clone(),
+        };
+
         v_flex()
             .id("launcher-surface")
             .a11y(Role::Dialog, "Command palette")
@@ -316,11 +328,6 @@ impl Render for Launcher {
             )
             .child(
                 h_flex()
-                    .id("launcher-hints")
-                    .a11y(
-                        Role::Paragraph,
-                        "Keyboard: up and down navigate, Enter opens, Escape closes",
-                    )
                     .px_4()
                     .py(px(8.))
                     .gap_4()
@@ -329,9 +336,25 @@ impl Render for Launcher {
                     .border_color(theme.border)
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("↑↓  navigate")
-                    .child("↵  open")
-                    .child("esc  close"),
+                    .child(
+                        div()
+                            .id("launcher-status")
+                            .a11y(Role::Status, status_label)
+                            .a11y_live(accesskit::Live::Polite)
+                            .child(status_text),
+                    )
+                    .child(
+                        h_flex()
+                            .id("launcher-hints")
+                            .a11y(
+                                Role::Paragraph,
+                                "Keyboard: up and down navigate, Enter opens, Escape closes",
+                            )
+                            .gap_4()
+                            .child("↑↓  navigate")
+                            .child("↵  open")
+                            .child("esc  close"),
+                    ),
             )
     }
 }
