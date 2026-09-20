@@ -58,7 +58,9 @@ impl ItemFilter {
     /// Construct a filter with explicit scoring configuration.
     pub fn new(config: FuzzyMatchConfig) -> Self {
         Self {
-            matcher: SkimMatcherV2::default(),
+            // Skim is smart-case by default; callers hand over the raw
+            // query, and uppercase input must stay case-insensitive.
+            matcher: SkimMatcherV2::default().ignore_case(),
             config,
         }
     }
@@ -289,5 +291,25 @@ mod tests {
         }];
         let r = f.filter_indices(&items, "zzz");
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn uppercase_query_matches_lowercase_items() {
+        // Regression: skim is smart-case, so without ignore_case the raw
+        // query "Set" would turn matching case-sensitive and miss
+        // all-lowercase names entirely.
+        let f = ItemFilter::default();
+        let items = [
+            Entry {
+                name: "settings",
+                desc: None,
+            },
+            Entry {
+                name: "notifications",
+                desc: None,
+            },
+        ];
+        let r = f.filter_indices(&items, "Set");
+        assert_eq!(r, vec![0]);
     }
 }

@@ -56,22 +56,20 @@ Messages sent while disconnected go into a bounded pending buffer (64 messages m
 
 ### Wiring into GPUI context
 
-GPUI runs async work through `cx.spawn()`, which gives you a handle to the GPUI async context. The WebSocket connect loop runs as a background task:
+GPUI runs async work through `cx.spawn()`, which gives you a handle to the GPUI async context. The WebSocket module ships no built-in spawner, so run the connect loop as a background task yourself:
 
 ```rust
-pub fn spawn_connect(url: String, cx: &mut gpui::App) {
-    let mut client = WebSocketClient::new(url);
-    cx.spawn(async move |cx| {
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(e) = client.connect_loop().await {
-                    tracing::error!(error = %e, "websocket terminated");
-                }
-            })
-            .await
-    })
-    .detach();
-}
+let mut client = WebSocketClient::new(url);
+cx.spawn(async move |cx| {
+    cx.background_executor()
+        .spawn(async move {
+            if let Err(e) = client.connect_loop().await {
+                tracing::error!(error = %e, "websocket terminated");
+            }
+        })
+        .await
+})
+.detach();
 ```
 
 The important part here is `cx.background_executor().spawn(...)`. The heavy I/O work (WebSocket reads and writes) runs on a background executor, not on the main GPUI thread. The outer `cx.spawn()` gives you access to the GPUI context for posting results back to the UI.
