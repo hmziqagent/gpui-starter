@@ -48,7 +48,7 @@ fn capability_status_reflects_bridge_availability() {
     let wasm = capability_status(false);
     assert!(!wasm.supported);
     assert!(!wasm.enabled);
-    assert!(wasm.degraded);
+    assert!(!wasm.degraded);
     assert!(wasm.reason.is_some());
 }
 

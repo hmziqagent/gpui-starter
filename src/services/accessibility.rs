@@ -134,11 +134,13 @@ pub fn capability_status(bridge_available: bool) -> CapabilityStatus {
             last_error: None,
         }
     } else {
+        // Unsupported-and-disabled, matching the wasm capability convention
+        // (e.g. single_instance): a missing platform bridge is not degraded.
         CapabilityStatus {
             supported: false,
             enabled: false,
-            degraded: true,
-            reason: Some("gpui web stack has no accesskit bridge".into()),
+            degraded: false,
+            reason: Some("accesskit bridge unavailable on wasm".into()),
             last_error: None,
         }
     }
