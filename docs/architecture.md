@@ -46,7 +46,7 @@ Every module lives under `src/`. Modules that depend on other modules are noted 
 | `undo_stack` | Undo/redo for reversible operations (e.g., theme switches). | `capabilities` |
 | `shortcuts` | Global keyboard shortcut registration. | `app_state`, `capabilities` |
 | `desktop_actions` | System integrations: clipboard, file opener, diagnostics copy. | `capabilities`, `app_state` |
-| `accessibility` | Accessibility helpers. | `capabilities` |
+| `accessibility` | AccessKit foundation: `A11yExt` element helpers, live bridge/window snapshot, capability registration. | `capabilities` |
 | `secure_storage` | Keychain/credential storage abstraction. | `capabilities` |
 | `first_run` | First-run experience detection. | `app_state`, `capabilities` |
 | `launcher` | Command palette / search launcher overlay. | `events`, `commands`, `capabilities` |
@@ -302,6 +302,10 @@ Two patterns coexist:
 ### Capability tracking
 
 Every subsystem registers its status in `CapabilityRegistry` on init. The status includes `supported`, `enabled`, `degraded`, `reason`, and `last_error`. The diagnostics page reads this registry to display system health.
+
+### Accessibility
+
+Accessibility runs on gpui's native AccessKit bridge: macOS NSAccessibility, Windows UIA, Linux X11/Wayland AT-SPI. The wasm stack ships no bridge, so accessibility is inactive there. An element is announced only when it has an `.id(...)` and a role, applied through gpui's `role`/`aria_*` builders or the `A11yExt` helpers in `services/accessibility.rs`. The shell exposes landmarks (navigation, main, status, page heading) and changes a user must hear are announced through polite live regions (command palette selection and result count, form results, errors). `accessibility::initialize` registers the `accessibility` capability; a snapshot global tracks bridge state and active-window counts, refreshed on window open/close and when assistive technology connects or disconnects mid-session. The diagnostics page renders both.
 
 ### Error handling
 
