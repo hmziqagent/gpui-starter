@@ -51,8 +51,7 @@ pub fn section_card(title: &str, description: &str, cx: &App) -> Div {
 }
 
 /// Demo card. `key` must be unique per call site: the a11y node id derives
-/// from it, and label-derived ids collide on repeat text (duplicate a11y
-/// node id panics in debug builds).
+/// from it, and label text repeats (duplicate ids panic in debug builds).
 pub fn mini_card(key: &str, label: &str, cx: &App) -> Div {
     v_flex()
         .gap_2()
@@ -75,9 +74,8 @@ pub fn mini_card(key: &str, label: &str, cx: &App) -> Div {
         )
 }
 
-/// Status read-out. `key` names the call site ("nocache", "swr", ...), never
-/// the status: every section renders Idle at load and status-derived ids
-/// would collide (duplicate a11y node id panics in debug builds).
+/// Status read-out. `key` names the call site, never the status: all
+/// sections render Idle at load, and duplicate ids panic in debug builds.
 pub fn status_badge(key: &str, status: QueryStatus, cx: &App) -> Stateful<Div> {
     let color = match status {
         QueryStatus::Idle => cx.theme().muted_foreground,

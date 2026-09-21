@@ -1,6 +1,6 @@
 //! Accessibility contracts that hold without a live window: capability
 //! registration truthfulness, snapshot semantics, the public element-helper
-//! surface, and checklist claims that must stay anchored in code.
+//! surface, checklist claims, and runtime-proven rules, all anchored in code.
 
 use gpui::{Role, accesskit::Live, div, prelude::*};
 
@@ -119,4 +119,54 @@ fn checklist_bridge_claims_anchor_in_code() {
         virtual_list.contains("Role::ListItem"),
         "virtual list rows must be list items as documented"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Runtime-verified rules must match code
+// ---------------------------------------------------------------------------
+
+// Keyed ids prevent the duplicate-a11y-node-id panic; virtual_list's anchors
+// pin the 0-based position contract. Both need a live window (see header).
+
+#[test]
+fn virtual_list_pins_zero_based_positions_and_container_setsize() {
+    let virtual_list =
+        std::fs::read_to_string("src/ui/widgets/virtual_list.rs").expect("read virtual list");
+
+    assert!(
+        virtual_list.contains(".aria_position_in_set(index)"),
+        "accesskit stores position_in_set 0-based; AT bridges report stored+1"
+    );
+    assert!(
+        !virtual_list.contains(".aria_position_in_set(index + 1)"),
+        "a +1 here reads one high through every AT bridge"
+    );
+    // 2 = the container call (the only one the bridge reads) + the item-level
+    // call; item-only setsize surfaces as none through the ancestor walk.
+    assert_eq!(
+        virtual_list.matches(".aria_size_of_set(total)").count(),
+        2,
+        "the bridge walks ancestors only, so the List container must declare setsize"
+    );
+}
+
+#[test]
+fn playground_helpers_derive_ids_from_call_site_keys() {
+    let helpers = std::fs::read_to_string("src/features/pages/query_playground/ui_helpers.rs")
+        .expect("read playground ui helpers");
+
+    for (keyed, text_derived) in [
+        ("pg-mini-title-{key}", "pg-mini-title-{}"),
+        ("pg-status-{key}", "pg-status-{}"),
+        ("pg-chip-{key}", "pg-chip-{}"),
+    ] {
+        assert!(
+            helpers.contains(keyed),
+            "{keyed} must stay: ids derive from the per-call-site key"
+        );
+        assert!(
+            !helpers.contains(text_derived),
+            "{text_derived} is the collision shape: text repeats across call sites"
+        );
+    }
 }
