@@ -102,7 +102,7 @@ nix build .#default    # release binary in result/bin/gpui-starter
 
 ## Architecture
 
-See [docs/gpui-architecture.md](docs/gpui-architecture.md) for the module layout and data flow.
+See [docs/architecture.md](docs/architecture.md) for the module layout and data flow.
 
 ## Marketing Site
 

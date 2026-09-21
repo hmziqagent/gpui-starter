@@ -55,13 +55,16 @@ The snapshot global tracks bridge state and active-window counts and is
 refreshed on window open/close and when assistive technology connects or
 disconnects mid-session (`Window::is_a11y_active`).
 
-Known gaps live in gpui-component/gpui and cannot be fixed from app code:
+Known gaps live in gpui-component/gpui and the Linux AT-SPI bridge; closing
+them needs upstream fixes or app-side contract changes:
 
 - Toast notifications render no accessibility nodes.
 - Title bar window controls (minimize/maximize/close) and resizable-panel
   drag handles carry no accessibility semantics.
 - Sidebar items are not keyboard-focusable: assistive-tech activation works,
-  Tab order does not reach them.
+  Tab order does not reach them. The kit's item is unfocusable; a tab stop
+  on the app-side wrapper would change mouse-focus transfer and Tab-order
+  contracts.
 - Form fields have no programmatic label-to-input association; inputs carry
   explicit `aria_label`s and error text is a nearby labeled alert.
 - Popup menu items with a checkmark expose the checked state only visually;
@@ -73,6 +76,9 @@ Known gaps live in gpui-component/gpui and cannot be fixed from app code:
   group labels instead.
 - Leaf text inside labeled containers (markdown chat bodies, response bodies)
   is summarized by the container label, not exposed verbatim.
+- The Linux AT-SPI bridge exposes no heading-level attribute (`aria_level`
+  is set in code but not announced) and maps Navigation/Main to a generic
+  "Landmark" role; the landmark's name carries the distinction.
 
 ## Manual QA Passes
 

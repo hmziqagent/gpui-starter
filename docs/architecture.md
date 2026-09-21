@@ -4,7 +4,7 @@ GPUI Starter is a desktop application boilerplate built with the [GPUI](https://
 
 ## Dependency Foundations
 
-The UI foundation is [GPUI Kit](https://github.com/longbridge/gpui-kit) 0.6.0 from crates.io (`gpui-kit` + `gpui-component` + `gpui-kit-assets`), built on `gpui-pre` — the crates.io snapshot of Zed's `gpui` (package renamed `gpui-pre`, lib name still `gpui`). Every crate in the graph resolves to exactly ONE gpui copy; that single-copy discipline drives every override below. Supply-chain note: `gpui-pre` is published by the kit maintainer as a snapshot of `zed-industries/zed`, so the UI foundation depends on that publishing pipeline rather than on Zed's own crates.io releases (which stop at 0.2.x).
+The UI foundation is [GPUI Kit](https://github.com/longbridge/gpui-kit) 0.6.4 from crates.io (`gpui-kit` + `gpui-component` + `gpui-kit-assets`), built on `gpui-pre` — the crates.io snapshot of Zed's `gpui` (package renamed `gpui-pre`, lib name still `gpui`). Every crate in the graph resolves to exactly ONE gpui copy; that single-copy discipline drives every override below. Supply-chain note: `gpui-pre` is published by the kit maintainer as a snapshot of `zed-industries/zed`, so the UI foundation depends on that publishing pipeline rather than on Zed's own crates.io releases (which stop at 0.2.x).
 
 Two libraries are not gpui-pre-native upstream yet, so we override them — never by vendoring (copying their sources into this repo as path deps is forbidden: it forks maintenance and defeats review/update):
 
