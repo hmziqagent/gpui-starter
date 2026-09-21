@@ -90,7 +90,9 @@ impl Render for AppRoot {
                             page,
                             active: !self.render_error && active_page == page,
                             collapsed: false,
-                            position: ix + 1,
+                            // accesskit stores position_in_set 0-based; AT
+                            // bridges report the stored value +1.
+                            position: ix,
                             total: Page::all().len(),
                             on_click: Rc::new(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 this.set_route(AppRoute::page(page), cx);
@@ -108,6 +110,9 @@ impl Render for AppRoot {
                 div()
                     .id("sidebar-nav")
                     .a11y(Role::Navigation, "Main navigation")
+                    // AT-SPI derives each item's setsize from the nearest
+                    // ancestor that declares one; item-level values are ignored.
+                    .aria_size_of_set(Page::all().len())
                     .child(sidebar),
             );
 
