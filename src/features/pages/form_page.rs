@@ -270,6 +270,7 @@ impl FormPage {
                             div()
                                 .id(error_id.clone())
                                 .a11y(Role::Alert, err.clone())
+                                .a11y_live(accesskit::Live::Polite)
                                 .text_color(danger)
                                 .text_xs()
                                 .child(err),

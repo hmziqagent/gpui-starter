@@ -507,6 +507,9 @@ pub fn open_launcher(cx: &mut App) {
         window
             .update(cx, |_, window, _| {
                 window.activate_window();
+                // WindowOptions has no title field; this is what names both
+                // the WM window and the a11y root node.
+                window.set_window_title("Command Palette");
             })
             .ok();
 

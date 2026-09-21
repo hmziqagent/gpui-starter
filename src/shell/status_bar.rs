@@ -111,9 +111,11 @@ pub fn render(route: &AppRoute, cx: &App) -> impl gpui::IntoElement {
 }
 
 /// One read-out row. The text must be the accessible label: plain string
-/// children produce no accessibility nodes on their own.
+/// children produce no accessibility nodes of their own. Paragraph, not
+/// Label: Label-role nodes draw their AT name from the value property, so
+/// these rows would read as unnamed through the bridge.
 fn status_row(id: &'static str, text: String) -> Stateful<Div> {
-    div().id(id).a11y(Role::Label, text.clone()).child(text)
+    div().id(id).a11y(Role::Paragraph, text.clone()).child(text)
 }
 
 fn truncate_error(s: &str, max_len: usize) -> &str {
