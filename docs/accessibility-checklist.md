@@ -48,8 +48,8 @@ Verified practice for every UI change:
 - State changes a user must hear go through polite live regions: command
   palette selection and result count, form results, errors, notification
   counts. Nothing that changes per frame is live, or it would spam the reader.
-- The Diagnostics page registers the `accessibility` capability and renders
-  its read-outs as labeled list items.
+- App init registers the `accessibility` capability; the Diagnostics page
+  renders the registry and its read-outs as labeled list items.
 
 The snapshot global tracks bridge state and active-window counts and is
 refreshed on window open/close and when assistive technology connects or
@@ -64,6 +64,13 @@ Known gaps live in gpui-component/gpui and cannot be fixed from app code:
   Tab order does not reach them.
 - Form fields have no programmatic label-to-input association; inputs carry
   explicit `aria_label`s and error text is a nearby labeled alert.
+- Popup menu items with a checkmark expose the checked state only visually;
+  `menu_with_check` has no `aria_toggled`.
+- A button's attached dropdown menu cannot expose `aria_expanded`; the popup
+  state is internal to the component.
+- The query devtools registry header row and its sort/filter captions are
+  visual-only; row labels embed the column values and the button groups carry
+  group labels instead.
 - Leaf text inside labeled containers (markdown chat bodies, response bodies)
   is summarized by the container label, not exposed verbatim.
 
