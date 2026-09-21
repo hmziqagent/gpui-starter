@@ -50,7 +50,10 @@ pub fn section_card(title: &str, description: &str, cx: &App) -> Div {
         )
 }
 
-pub fn mini_card(label: &str, cx: &App) -> Div {
+/// Demo card. `key` must be unique per call site: the a11y node id derives
+/// from it, and label-derived ids collide on repeat text (duplicate a11y
+/// node id panics in debug builds).
+pub fn mini_card(key: &str, label: &str, cx: &App) -> Div {
     v_flex()
         .gap_2()
         .p_3()
@@ -62,7 +65,7 @@ pub fn mini_card(label: &str, cx: &App) -> Div {
         .child(
             div()
                 .id(ElementId::Name(SharedString::from(format!(
-                    "pg-mini-title-{label}"
+                    "pg-mini-title-{key}"
                 ))))
                 .a11y(Role::Heading, label.to_string())
                 .aria_level(3)
@@ -72,7 +75,10 @@ pub fn mini_card(label: &str, cx: &App) -> Div {
         )
 }
 
-pub fn status_badge(status: QueryStatus, cx: &App) -> Stateful<Div> {
+/// Status read-out. `key` names the call site ("nocache", "swr", ...), never
+/// the status: every section renders Idle at load and status-derived ids
+/// would collide (duplicate a11y node id panics in debug builds).
+pub fn status_badge(key: &str, status: QueryStatus, cx: &App) -> Stateful<Div> {
     let color = match status {
         QueryStatus::Idle => cx.theme().muted_foreground,
         QueryStatus::LoadingEmpty | QueryStatus::LoadingWithData => cx.theme().info,
@@ -83,8 +89,7 @@ pub fn status_badge(status: QueryStatus, cx: &App) -> Stateful<Div> {
     let label = format!("Status: {}", status.label());
     div()
         .id(ElementId::Name(SharedString::from(format!(
-            "pg-status-{}",
-            status.label()
+            "pg-status-{key}"
         ))))
         .a11y(Role::Paragraph, label)
         .px_3()
@@ -97,10 +102,12 @@ pub fn status_badge(status: QueryStatus, cx: &App) -> Stateful<Div> {
         .child(status.label().to_string())
 }
 
-pub fn chip(label: &str, background: Hsla, cx: &App) -> Stateful<Div> {
+/// Inline read-only chip. `key` must be unique per call site for the same
+/// reason as [`mini_card`]: labels carry runtime data and repeat.
+pub fn chip(key: &str, label: &str, background: Hsla, cx: &App) -> Stateful<Div> {
     div()
         .id(ElementId::Name(SharedString::from(format!(
-            "pg-chip-{label}"
+            "pg-chip-{key}"
         ))))
         .a11y(Role::Paragraph, label.to_string())
         .px_3()

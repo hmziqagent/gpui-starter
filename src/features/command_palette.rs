@@ -186,7 +186,7 @@ impl Render for Launcher {
             None => status_text.clone(),
         };
 
-        v_flex()
+        let dialog = v_flex()
             .id("launcher-surface")
             .a11y(Role::Dialog, "Command palette")
             .size_full()
@@ -196,7 +196,6 @@ impl Render for Launcher {
             .rounded(theme.radius_lg)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .focus_trap("launcher", &self.focus_handle)
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| {
                 this.state.select_down();
                 cx.notify();
@@ -360,7 +359,14 @@ impl Render for Launcher {
                             .child("↵  open")
                             .child("esc  close"),
                     ),
-            )
+            );
+
+        // The trap container has an id but no a11y role, so gpui drops the
+        // wrapped element's node — trap a roleless wrapper, not the Dialog.
+        div()
+            .size_full()
+            .focus_trap("launcher", &self.focus_handle)
+            .child(dialog)
     }
 }
 

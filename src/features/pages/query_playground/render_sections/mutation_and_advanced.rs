@@ -98,10 +98,20 @@ impl QueryPlaygroundPage {
                                 .child(m_status.label().to_string())
                         })
                         .when_some(m_data, |el, d| {
-                            el.child(chip(&format!("data: {}", d), cx.theme().background, cx))
+                            el.child(chip(
+                                "mutation-data",
+                                &format!("data: {}", d),
+                                cx.theme().background,
+                                cx,
+                            ))
                         })
                         .when_some(m_vars, |el, v| {
-                            el.child(chip(&format!("vars: {}", v), cx.theme().background, cx))
+                            el.child(chip(
+                                "mutation-vars",
+                                &format!("vars: {}", v),
+                                cx.theme().background,
+                                cx,
+                            ))
                         })
                         .when_some(m_error, |el, e| {
                             el.child(
@@ -205,13 +215,19 @@ impl QueryPlaygroundPage {
                         .label("Reset")
                         .on_click(cx.listener(|this, _, _, cx| this.reset_infinite(cx))),
                 )
-                .child(status_badge(inf_status, cx))
+                .child(status_badge("infinite", inf_status, cx))
                 .child(chip(
+                    "infinite-pages",
                     &format!("pages: {}/3 (max)", page_count),
                     cx.theme().background,
                     cx,
                 ))
-                .child(chip(&range_label, cx.theme().background, cx)),
+                .child(chip(
+                    "infinite-range",
+                    &range_label,
+                    cx.theme().background,
+                    cx,
+                )),
         )
         .when(!pages.is_empty(), |el| {
             el.child(
@@ -272,7 +288,7 @@ impl QueryPlaygroundPage {
                         .disabled(loading)
                         .on_click(cx.listener(|this, _, _, cx| this.fetch_select(cx))),
                 )
-                .child(status_badge(source_status, cx)),
+                .child(status_badge("select", source_status, cx)),
         )
         .child(
             h_flex().gap_4().px_4().pb_3()
@@ -359,9 +375,12 @@ impl QueryPlaygroundPage {
                 .items_center()
                 .px_4()
                 .pb_3()
-                .child(status_badge(status, cx))
-                .when_some(data, |el, d| el.child(chip(&d, cx.theme().background, cx)))
+                .child(status_badge("imperative", status, cx))
+                .when_some(data, |el, d| {
+                    el.child(chip("imperative-data", &d, cx.theme().background, cx))
+                })
                 .child(chip(
+                    "imperative-signal",
                     &format!("signal cancelled: {}", signal_cancelled),
                     cx.theme().background,
                     cx,

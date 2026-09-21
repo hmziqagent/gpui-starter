@@ -108,14 +108,16 @@ impl QueryPlaygroundPage {
                 .items_center()
                 .px_4()
                 .pb_3()
-                .child(status_badge(status, cx))
+                .child(status_badge("http", status, cx))
                 .when_some(result.as_ref(), |el, r| {
                     el.child(chip(
+                        "http-request",
                         &format!("{} {} → {}", r.status, r.method, r.url),
                         bg,
                         cx,
                     ))
                     .child(chip(
+                        "http-meta",
                         &format!(
                             "{} · {}ms",
                             short_content_type(&r.content_type),
