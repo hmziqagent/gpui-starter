@@ -59,6 +59,7 @@ where
 {
     let entity = cx.entity();
     let list_id: ElementId = id.into();
+    let total = item_sizes.len();
 
     let mut list = v_virtual_list(entity, list_id.clone(), item_sizes, render_items)
         .track_scroll(scroll_handle);
@@ -71,6 +72,9 @@ where
         .id((list_id, "list-region"))
         .role(Role::List)
         .aria_orientation(Orientation::Vertical)
+        // AT-SPI derives each item's setsize from the nearest ancestor that
+        // declares one; item-level values are ignored.
+        .aria_size_of_set(total)
         .size_full()
         .child(list);
 
@@ -94,7 +98,9 @@ pub fn virtual_list_item(
         .id(id)
         .role(Role::ListItem)
         .aria_label(label)
-        .aria_position_in_set(index + 1)
+        // accesskit stores position_in_set 0-based; AT bridges report the
+        // stored value +1.
+        .aria_position_in_set(index)
         .aria_size_of_set(total)
 }
 

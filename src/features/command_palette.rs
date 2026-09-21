@@ -235,6 +235,9 @@ impl Render for Launcher {
                     .id("launcher-results")
                     .a11y(Role::ListBox, "Results")
                     .aria_orientation(Orientation::Vertical)
+                    // AT-SPI derives each item's setsize from the nearest
+                    // ancestor that declares one; item-level values are ignored.
+                    .aria_size_of_set(rows.len())
                     .flex_1()
                     .overflow_y_scrollbar()
                     .py_1()
@@ -255,7 +258,9 @@ impl Render for Launcher {
                             .a11y(Role::ListBoxOption, title.clone())
                             .aria_description(subtitle.clone())
                             .aria_selected(is_selected)
-                            .aria_position_in_set(display_ix + 1)
+                            // accesskit stores position_in_set 0-based; AT
+                            // bridges report the stored value +1.
+                            .aria_position_in_set(display_ix)
                             .aria_size_of_set(rows.len())
                             .px_3()
                             .py_2()

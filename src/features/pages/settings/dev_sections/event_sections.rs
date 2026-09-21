@@ -91,6 +91,9 @@ pub fn render_event_emitter_section(
                 .id("settings-event-log")
                 .a11y(Role::List, "Received events")
                 .aria_orientation(Orientation::Vertical)
+                // AT-SPI derives each item's setsize from the nearest
+                // ancestor that declares one; item-level values are ignored.
+                .aria_size_of_set(log_total)
                 .gap_1()
                 .when(event_log.is_empty(), |el| {
                     el.child(
@@ -111,7 +114,9 @@ pub fn render_event_emitter_section(
                             "settings-event-{ix}"
                         ))))
                         .a11y(Role::ListItem, entry.clone())
-                        .aria_position_in_set(ix + 1)
+                        // accesskit stores position_in_set 0-based; AT
+                        // bridges report the stored value +1.
+                        .aria_position_in_set(ix)
                         .aria_size_of_set(log_total)
                         .text_xs()
                         .p_1()

@@ -77,6 +77,9 @@ impl Render for NotificationsPage {
                     .id("notifications-list")
                     .a11y(Role::List, "Notifications")
                     .aria_orientation(Orientation::Vertical)
+                    // AT-SPI derives each item's setsize from the nearest
+                    // ancestor that declares one; item-level values are ignored.
+                    .aria_size_of_set(total)
                     .children(
                         items
                             .into_iter()
@@ -106,7 +109,9 @@ fn render_item(index: usize, total: usize, item: NotificationInboxItem) -> State
             item.id
         ))))
         .a11y(Role::ListItem, label)
-        .aria_position_in_set(index + 1)
+        // accesskit stores position_in_set 0-based; AT bridges report the
+        // stored value +1.
+        .aria_position_in_set(index)
         .aria_size_of_set(total)
         .gap_1()
         .p_3()
