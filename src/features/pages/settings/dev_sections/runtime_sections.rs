@@ -1,20 +1,23 @@
-use gpui::{prelude::*, *};
-use gpui_component::{WindowExt as _, button::Button, label::Label};
+use gpui_kit::component::{WindowExt as _, button::Button};
+use gpui_kit::{prelude::*, *};
 
 use crate::connectivity;
 use crate::desktop_actions;
 use crate::secure_storage;
 use crate::session::{self, SessionState};
 
-/// Renders the "Desktop Actions" settings card.
 pub fn render_desktop_actions_section(
     cx: &mut Context<super::super::SettingsPage>,
 ) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(Label::new("Desktop Actions"))
+        .child(super::section_heading(
+            "settings-desktop-actions-title",
+            "Desktop Actions",
+        ))
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -45,6 +48,7 @@ pub fn render_desktop_actions_section(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -77,6 +81,7 @@ pub fn render_desktop_actions_section(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -114,15 +119,18 @@ pub fn render_desktop_actions_section(
         )
 }
 
-/// Renders the "Runtime Boundaries" card (connectivity, session, secure storage).
 pub fn render_runtime_boundaries_section(
     cx: &mut Context<super::super::SettingsPage>,
 ) -> impl IntoElement {
     super::settings_card_base(cx)
-        .child(Label::new("Runtime Boundaries"))
+        .child(super::section_heading(
+            "settings-runtime-boundaries-title",
+            "Runtime Boundaries",
+        ))
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -170,6 +178,7 @@ pub fn render_runtime_boundaries_section(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(

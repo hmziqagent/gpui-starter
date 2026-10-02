@@ -1,9 +1,9 @@
-use gpui::prelude::*;
-use gpui::*;
-
-use gpui_component::{ActiveTheme as _, Disableable as _, button::Button, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, button::Button, h_flex};
+use gpui_kit::{prelude::*, *};
 
 use gpui_query::core::QueryStatus;
+
+use crate::accessibility::A11yExt as _;
 
 use super::super::ui_helpers::{chip, section_card, status_badge};
 use super::super::{HttpFetchKind, QueryPlaygroundPage};
@@ -106,14 +106,16 @@ impl QueryPlaygroundPage {
                 .items_center()
                 .px_4()
                 .pb_3()
-                .child(status_badge(status, cx))
+                .child(status_badge("http", status, cx))
                 .when_some(result.as_ref(), |el, r| {
                     el.child(chip(
+                        "http-request",
                         &format!("{} {} → {}", r.status, r.method, r.url),
                         bg,
                         cx,
                     ))
                     .child(chip(
+                        "http-meta",
                         &format!(
                             "{} · {}ms",
                             short_content_type(&r.content_type),
@@ -131,6 +133,7 @@ impl QueryPlaygroundPage {
                 el.child(
                     div()
                         .id("pg-http-body")
+                        .a11y(Role::Code, "Response body")
                         .mx_4()
                         .mb_4()
                         .p_3()
@@ -146,6 +149,9 @@ impl QueryPlaygroundPage {
         .when_some(error.as_ref(), |el, err| {
             el.child(
                 div()
+                    .id("pg-http-error")
+                    .a11y(Role::Paragraph, format!("error: {err}"))
+                    .a11y_live(accesskit::Live::Polite)
                     .mx_4()
                     .mb_4()
                     .p_3()
@@ -157,7 +163,6 @@ impl QueryPlaygroundPage {
     }
 }
 
-/// Strip the `; charset=…` suffix from a content-type header for compact display.
 fn short_content_type(ct: &str) -> &str {
     ct.split(';').next().unwrap_or(ct).trim()
 }

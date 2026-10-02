@@ -1,5 +1,7 @@
-use gpui::{prelude::*, *};
-use gpui_component::{ActiveTheme as _, button::Button, v_flex};
+use gpui_kit::component::{ActiveTheme as _, button::Button, v_flex};
+use gpui_kit::{prelude::*, *};
+
+use crate::accessibility::A11yExt as _;
 
 /// Clear the error boundary and retry rendering the active page.
 #[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -37,11 +39,17 @@ impl Render for RenderErrorPage {
             .p_8()
             .child(
                 v_flex()
+                    .id("render-error-alert")
+                    .a11y(Role::Alert, "Render Error")
+                    .a11y_live(accesskit::Live::Polite)
                     .items_center()
                     .gap_3()
                     .max_w(px(480.))
                     .child(
                         div()
+                            .id("render-error-title")
+                            .a11y(Role::Heading, "Render Error")
+                            .aria_level(1)
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
                             .text_color(cx.theme().danger)
@@ -49,6 +57,8 @@ impl Render for RenderErrorPage {
                     )
                     .child(
                         div()
+                            .id("render-error-summary")
+                            .a11y(Role::Paragraph, summary.clone())
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(SharedString::from(summary)),
@@ -56,8 +66,10 @@ impl Render for RenderErrorPage {
                     .child(
                         Button::new("reload-current-page")
                             .label("Reload Page")
-                            .on_click(|_, _, cx| {
-                                cx.dispatch_action(&ReloadCurrentPage);
+                            .on_click(|_, window, cx| {
+                                // Window-scoped: App::dispatch_action is broken on
+                                // Windows (thread-local active-window lookup).
+                                window.dispatch_action(Box::new(ReloadCurrentPage), cx);
                             }),
                     ),
             )

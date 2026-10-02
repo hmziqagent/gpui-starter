@@ -1,14 +1,16 @@
-use gpui::SharedString;
+use std::rc::Rc;
 
-// No App context: gpui's test-support feature is a dev-dependency change,
-// so drive load_themes_from_str (what register_embedded_themes calls).
+use gpui_kit::SharedString;
+
+// No App context: gpui test-support is a dev-dependency change, so drive
+// load_themes_from_str and Theme::apply_config (the init.rs code paths).
 
 /// (file, theme names) of every theme inside every embedded themes/*.json.
 fn embedded_theme_names() -> Vec<(SharedString, Vec<SharedString>)> {
     crate::app::assets::embedded_themes()
         .into_iter()
         .map(|(file, json)| {
-            let names = serde_json::from_str::<gpui_component::theme::ThemeSet>(&json)
+            let names = serde_json::from_str::<gpui_kit::component::theme::ThemeSet>(&json)
                 .unwrap_or_else(|err| panic!("{file}: {err}"))
                 .themes
                 .iter()
@@ -26,9 +28,34 @@ fn embedded_theme_file_count_is_24() {
     assert_eq!(crate::app::assets::embedded_themes().len(), 24);
 }
 
+/// kit 0.7 adds `chart.grid` (ThemeColor::chart_grid); every embedded theme
+/// must resolve a grid color through apply_config, with or without the token.
+#[test]
+fn apply_config_resolves_chart_grid_for_every_embedded_theme() {
+    for (file, json) in crate::app::assets::embedded_themes() {
+        let set = serde_json::from_str::<gpui_kit::component::theme::ThemeSet>(&json)
+            .unwrap_or_else(|err| panic!("{file}: {err}"));
+        for config in set.themes {
+            let name = config.name.clone();
+            let explicit = config.colors.chart_grid.clone();
+            let mut theme = gpui_kit::component::Theme::default();
+            theme.apply_config(&Rc::new(config));
+
+            let expected = match explicit.as_deref() {
+                // 0.6 dropped this key silently; 0.7 parses it natively.
+                Some(value) => gpui_kit::component::theme::try_parse_color(value)
+                    .unwrap_or_else(|err| panic!("{file} {name}: {value}: {err}")),
+                // The documented 0.7 fallback for themes without chart.grid.
+                None => theme.border.opacity(0.6),
+            };
+            assert_eq!(theme.chart_grid, expected, "{file}: {name}");
+        }
+    }
+}
+
 #[test]
 fn every_embedded_theme_registers_and_resolves_by_name() {
-    let mut registry = gpui_component::ThemeRegistry::default();
+    let mut registry = gpui_kit::component::ThemeRegistry::default();
     for (file, json) in crate::app::assets::embedded_themes() {
         registry
             .load_themes_from_str(&json)
@@ -71,7 +98,7 @@ fn embedded_themes_do_not_collide_with_registry_defaults() {
 fn restore_reloads_every_embedded_file_into_a_cleared_registry() {
     // A kit watcher reload clears `themes` back to defaults + dir contents;
     // a bare registry is the post-clear state with an empty themes/ dir.
-    let mut registry = gpui_component::ThemeRegistry::default();
+    let mut registry = gpui_kit::component::ThemeRegistry::default();
     let restored = super::restore_embedded_themes(&mut registry);
     assert_eq!(restored, crate::app::assets::embedded_themes().len());
     for (file, names) in embedded_theme_names() {
@@ -91,7 +118,7 @@ fn restore_reloads_every_embedded_file_into_a_cleared_registry() {
 
 #[test]
 fn restore_reloads_only_files_with_missing_themes() {
-    let mut registry = gpui_component::ThemeRegistry::default();
+    let mut registry = gpui_kit::component::ThemeRegistry::default();
     let files = crate::app::assets::embedded_themes();
     let (head, tail) = files.split_at(files.len() / 2);
     for (file, json) in head {

@@ -4,8 +4,8 @@ A desktop application boilerplate built on [GPUI](https://github.com/zed-industr
 
 ## Prerequisites
 
-- Rust nightly (edition 2024)
-- macOS is the primary target. Linux on X11/Wayland works but is less tested.
+- Rust stable, edition 2024 (nightly only for the wasm target)
+- macOS is the primary target. Linux on X11/Wayland and Windows (MSVC) also build and run.
 
 ## Quick Start
 
@@ -54,6 +54,32 @@ nix develop            # dev shell with Vulkan/Wayland/XCB on LD_LIBRARY_PATH
 nix build .#default    # release binary in result/bin/gpui-starter
 ```
 
+### Windows Development
+
+Requirements: VS 2022 Build Tools with the C++ workload (`cl.exe`, `link.exe`)
+and Git Bash. Run from Git Bash:
+
+```sh
+scripts/windows-dev-env.sh --setup   # one-time: fetch the Windows SDK if missing
+. scripts/windows-dev-env.sh         # every shell: fix PATH/INCLUDE/LIB
+cargo build && cargo run
+```
+
+The setup step is needed when the Windows SDK component is not installed and
+you have no admin shell: it downloads the official SDK + CRT MSIs with
+[xwin](https://github.com/Jake-Shadle/xwin) and extracts them next to the repo
+(~1 GB under `../.xwin/`). Sourcing the script is needed in every Git Bash
+shell because `/usr/bin/link.exe` (coreutils) otherwise shadows MSVC's linker.
+PowerShell and cmd don't have that shadowing problem.
+
+To skip sourcing entirely, generate a gitignored `.cargo/config.toml` once —
+after that plain `cargo build`/`run`/`test` works in every shell:
+
+```sh
+scripts/windows-dev-env.sh --cargo-config
+cargo run
+```
+
 ## Features
 
 ### Core
@@ -68,6 +94,12 @@ nix build .#default    # release binary in result/bin/gpui-starter
 - Status bar
 - Cmd+K command palette with fuzzy search over app actions
 - Undo/redo stack bound to Cmd+Z / Cmd+Y
+
+### Accessibility
+
+- AccessKit bridge via gpui: screen readers on macOS, Linux, and Windows get labeled landmarks, headings, lists, and controls
+- Live regions announce command palette selection and result count, form outcomes, and errors as they change
+- Diagnostics reports bridge state and active window counts; the wasm build has no bridge, so accessibility is inactive there
 
 ### Data
 
@@ -93,11 +125,10 @@ nix build .#default    # release binary in result/bin/gpui-starter
 - Telemetry with off / local / remote modes behind a consent gate
 - Diagnostics page showing live app state and subsystem status
 - Integration test harness under `#[cfg(test)]`
-- AccessKit integration for screen readers
 
 ## Architecture
 
-See [docs/gpui-architecture.md](docs/gpui-architecture.md) for the module layout and data flow.
+See [docs/architecture.md](docs/architecture.md) for the module layout and data flow.
 
 ## Marketing Site
 

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use gpui::{AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, SharedString, Window};
-use gpui_component::WindowExt as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, SharedString, Window,
+};
 
 use super::backend_service::{
     LOG, NativeNotificationState, NotificationRuntimeSnapshot, NotificationService,
@@ -118,7 +120,6 @@ pub fn refresh_daemon_state(cx: &mut App) {
         cx.spawn(async move |cx| {
             let probe = runtime
                 .spawn_blocking(|| {
-                    // Both calls hit org.freedesktop.Notifications over D-Bus.
                     let info = notify_rust::get_server_information();
                     let caps = notify_rust::get_capabilities();
                     (info, caps)
@@ -293,8 +294,7 @@ pub fn open_system_settings(cx: &mut App) {
 
     #[cfg(target_os = "linux")]
     {
-        // gnome-control-center on GNOME/Ubuntu, else xdg-open on the settings
-        // URI. Best-effort: a missing binary just logs.
+        // Best-effort: a missing binary just logs.
         tracing::info!(target: LOG, "opening Linux notification settings");
         if std::process::Command::new("gnome-control-center")
             .arg("notifications")
@@ -316,7 +316,19 @@ pub fn open_system_settings(cx: &mut App) {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        tracing::info!(target: LOG, "opening Windows notification settings");
+        if let Err(err) = open::that_detached("ms-settings:notifications") {
+            tracing::warn!(target: LOG, error = %err, "failed to open Windows notification settings");
+            mutate_snapshot(cx, |snapshot| {
+                snapshot.last_backend_error =
+                    Some("could not open notification settings; open them manually".into());
+            });
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         tracing::warn!(target: LOG, "system notification settings unsupported on this platform");
         mutate_snapshot(cx, |snapshot| {

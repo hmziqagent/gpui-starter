@@ -3,12 +3,12 @@ mod check;
 mod download;
 mod types;
 
-use gpui::UpdateGlobal as _;
+use gpui_kit::UpdateGlobal as _;
 
 // Re-exported so external import paths stay stable.
 pub use types::{CheckForUpdates, PlatformAsset, UpdateManifest, UpdateSnapshot, UpdateStatus};
 
-pub fn initialize(cx: &mut gpui::App) {
+pub fn initialize(cx: &mut gpui_kit::App) {
     let channel = crate::app_state::update_channel(cx);
     cx.set_global(UpdateSnapshot {
         status: UpdateStatus::Idle,
@@ -32,8 +32,7 @@ pub fn initialize(cx: &mut gpui::App) {
     // with the page reload. The action handler above still runs either way.
     #[cfg(not(target_family = "wasm"))]
     {
-        // Startup check after 5 seconds, then re-check every 4 hours. GPUI
-        // background-executor timers instead of a spawned tokio sleep task.
+        // GPUI background-executor timers instead of a spawned tokio sleep task.
         cx.spawn(async move |cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(
@@ -86,29 +85,29 @@ pub fn initialize(cx: &mut gpui::App) {
     );
 }
 
-pub fn snapshot(cx: &gpui::App) -> UpdateSnapshot {
+pub fn snapshot(cx: &gpui_kit::App) -> UpdateSnapshot {
     cx.try_global::<UpdateSnapshot>()
         .cloned()
         .unwrap_or_default()
 }
 
-pub fn check_for_updates(cx: &mut gpui::App) {
+pub fn check_for_updates(cx: &mut gpui_kit::App) {
     check::check_for_updates(cx);
 }
 
-pub fn download_update(cx: &mut gpui::App) {
+pub fn download_update(cx: &mut gpui_kit::App) {
     download::download_update(cx);
 }
 
-pub fn apply_update(cx: &mut gpui::App) {
+pub fn apply_update(cx: &mut gpui_kit::App) {
     apply::apply_update(cx);
 }
 
-pub fn check_pending_swap(cx: &mut gpui::App) {
+pub fn check_pending_swap(cx: &mut gpui_kit::App) {
     apply::check_pending_swap(cx);
 }
 
-pub fn set_channel(channel: &str, cx: &mut gpui::App) {
+pub fn set_channel(channel: &str, cx: &mut gpui_kit::App) {
     let ch = if channel.is_empty() {
         "stable".to_string()
     } else {
@@ -127,7 +126,7 @@ pub fn set_channel(channel: &str, cx: &mut gpui::App) {
     );
 }
 
-fn set_status(status: UpdateStatus, cx: &mut gpui::App) {
+fn set_status(status: UpdateStatus, cx: &mut gpui_kit::App) {
     tracing::debug!(
         target: "gpui_starter::updater",
         status = ?status,
@@ -138,20 +137,19 @@ fn set_status(status: UpdateStatus, cx: &mut gpui::App) {
     });
 }
 
-fn reset_check_retry(cx: &mut gpui::App) {
+fn reset_check_retry(cx: &mut gpui_kit::App) {
     UpdateSnapshot::update_global(cx, |snap, _cx| {
         snap.check_retry_count = 0;
     });
 }
 
-fn reset_download_retry(cx: &mut gpui::App) {
+fn reset_download_retry(cx: &mut gpui_kit::App) {
     UpdateSnapshot::update_global(cx, |snap, _cx| {
         snap.download_retry_count = 0;
     });
 }
 
-/// Dispatch a native notification for "update available".
-fn notify_update_available(version: &str, cx: &mut gpui::App) {
+fn notify_update_available(version: &str, cx: &mut gpui_kit::App) {
     dispatch_background_notification(
         &format!("Update v{version} available"),
         "A new version is available. Open settings to download and install.",
@@ -159,8 +157,7 @@ fn notify_update_available(version: &str, cx: &mut gpui::App) {
     );
 }
 
-/// Dispatch a native notification for "update downloaded".
-fn notify_update_downloaded(version: &str, cx: &mut gpui::App) {
+fn notify_update_downloaded(version: &str, cx: &mut gpui_kit::App) {
     dispatch_background_notification(
         &format!("Update v{version} ready"),
         "Update downloaded — restart to apply.",
@@ -168,8 +165,8 @@ fn notify_update_downloaded(version: &str, cx: &mut gpui::App) {
     );
 }
 
-/// Dispatch a native notification for permanent update errors (retries exhausted).
-fn notify_update_error(cx: &mut gpui::App) {
+/// Permanent update errors only (retries exhausted).
+fn notify_update_error(cx: &mut gpui_kit::App) {
     dispatch_background_notification(
         "Update check failed",
         "Could not check or download updates. Please try again later.",
@@ -178,7 +175,7 @@ fn notify_update_error(cx: &mut gpui::App) {
 }
 
 /// Send a notification via the notification service without requiring a window handle.
-fn dispatch_background_notification(title: &str, body: &str, cx: &mut gpui::App) {
+fn dispatch_background_notification(title: &str, body: &str, cx: &mut gpui_kit::App) {
     crate::notifications::inbox::record_attempt(
         crate::notifications::inbox::NotificationAttemptRecord {
             title: title.to_string(),

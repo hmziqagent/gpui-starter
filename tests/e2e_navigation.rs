@@ -11,8 +11,13 @@ use gpui_starter::sidebar::Page;
 #[test]
 fn test_sidebar_pages_exist() {
     let all = Page::all();
-    // The app must expose exactly nine pages.
-    assert_eq!(all.len(), 9, "expected 9 sidebar pages, got {}", all.len());
+    // The app must expose exactly ten pages (nine feature pages + Gallery).
+    assert_eq!(
+        all.len(),
+        10,
+        "expected 10 sidebar pages, got {}",
+        all.len()
+    );
 
     // Every page variant that AppRoot::active_page_view matches on must be
     // present in the canonical list.
@@ -125,8 +130,8 @@ fn test_settings_page_loads() {
         fn _assert_settings_page_constructible() {
             // Compile-time proof of the public constructor signature.
             let _: fn(
-                &mut gpui::Window,
-                &mut gpui::Context<gpui_starter::views::SettingsPage>,
+                &mut gpui_kit::Window,
+                &mut gpui_kit::Context<gpui_starter::views::SettingsPage>,
             ) -> gpui_starter::views::SettingsPage = gpui_starter::views::SettingsPage::new;
         }
     };

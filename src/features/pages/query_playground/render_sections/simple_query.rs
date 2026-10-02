@@ -1,11 +1,9 @@
-use gpui::prelude::*;
-use gpui::*;
-
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
 };
+use gpui_kit::{prelude::*, *};
 
 use gpui_query::core::QueryStatus;
 
@@ -77,12 +75,17 @@ impl QueryPlaygroundPage {
                 .items_center()
                 .px_4()
                 .pb_3()
-                .child(status_badge(status, cx))
+                .child(status_badge("simple", status, cx))
                 .when_some(data_preview, |el, user| {
-                    el.child(chip(&format!("{} <{}>", user.name, user.email), bg, cx))
+                    el.child(chip(
+                        "simple-user",
+                        &format!("{} <{}>", user.name, user.email),
+                        bg,
+                        cx,
+                    ))
                 })
                 .when_some(cache_age, |el, age| {
-                    el.child(chip(&format!("age: {}ms", age), bg, cx))
+                    el.child(chip("simple-age", &format!("age: {}ms", age), bg, cx))
                 }),
         )
     }

@@ -1,12 +1,41 @@
-use gpui::{
-    App, AppContext as _, Bounds, Focusable as _, SharedString, WindowBounds, WindowKind,
-    WindowOptions, px, size,
+use gpui_kit::component::TitleBar;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Bounds, Focusable as _, Global, SharedString, Size,
+    WindowBounds, WindowKind, WindowOptions, point, px, size,
 };
-use gpui_component::{Root, TitleBar};
 
-// ---------------------------------------------------------------------------
-// Window creation
-// ---------------------------------------------------------------------------
+/// The main app window, recorded at creation so code off the OS-input path
+/// (tray, shutdown) can reach it without `active_window()`, which resolves
+/// via thread-local `GetActiveWindow()` on Windows.
+#[derive(Clone, Copy)]
+pub struct RootWindow(pub AnyWindowHandle);
+
+impl Global for RootWindow {}
+
+fn note_root_window(handle: AnyWindowHandle, cx: &mut App) {
+    cx.set_global(RootWindow(handle));
+}
+
+/// The recorded main window, if one has been opened.
+pub fn root_window(cx: &App) -> Option<AnyWindowHandle> {
+    cx.try_global::<RootWindow>().map(|root| root.0)
+}
+
+/// Dispatch Quit at the recorded root window, falling back to app-level
+/// dispatch. `App::dispatch_action` routes at `active_window()` — thread-local
+/// `GetActiveWindow()` on Windows — which still reports the closing palette
+/// after an Esc and drops the action.
+pub fn dispatch_quit(cx: &mut App) {
+    let routed = root_window(cx).is_some_and(|root| {
+        root.update(cx, |_, window, cx| {
+            window.dispatch_action(Box::new(crate::app::Quit), cx)
+        })
+        .is_ok()
+    });
+    if !routed {
+        cx.dispatch_action(&crate::app::Quit);
+    }
+}
 
 pub fn create_new_window(title: &str, cx: &mut App) {
     let mut window_size = size(px(1400.0), px(900.0));
@@ -18,8 +47,8 @@ pub fn create_new_window(title: &str, cx: &mut App) {
     let persisted_bounds = crate::app_state::config(cx).window_bounds;
     let window_bounds = if let Some(bounds) = persisted_bounds {
         Bounds {
-            origin: gpui::point(px(bounds.x), px(bounds.y)),
-            size: gpui::size(px(bounds.width), px(bounds.height)),
+            origin: point(px(bounds.x), px(bounds.y)),
+            size: size(px(bounds.width), px(bounds.height)),
         }
     } else {
         Bounds::centered(None, window_size, cx)
@@ -30,7 +59,7 @@ pub fn create_new_window(title: &str, cx: &mut App) {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(window_bounds)),
             titlebar: Some(TitleBar::title_bar_options()),
-            window_min_size: Some(gpui::Size {
+            window_min_size: Some(Size {
                 width: px(480.),
                 height: px(320.),
             }),
@@ -38,23 +67,30 @@ pub fn create_new_window(title: &str, cx: &mut App) {
             // The app id becomes Wayland app_id / X11 WM_CLASS, matching the
             // shipped .desktop's StartupWMClass so grouping + icons work.
             app_id: Some("gpui-starter".to_string()),
+            // Linux-only fields stay inline-qualified: hoisting the names into
+            // the import list turns them unused on every other target.
             #[cfg(target_os = "linux")]
-            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            window_background: gpui_kit::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]
-            window_decorations: Some(gpui::WindowDecorations::Client),
+            window_decorations: Some(gpui_kit::WindowDecorations::Client),
             ..Default::default()
         };
 
-        let Some(window) = cx
-            .open_window(options, |window, cx| {
-                let root_view = cx.new(|cx| crate::root::AppRoot::new(title.clone(), window, cx));
+        // gpui_kit::open_window needs &mut App, so from this async context it
+        // runs inside cx.update per the kit contract; it hosts the Base Root.
+        let Some((window, _root_view)) = cx
+            .update(|cx| {
+                gpui_kit::open_window(options, cx, |window, cx| {
+                    let root_view =
+                        cx.new(|cx| crate::root::AppRoot::new(title.clone(), window, cx));
 
-                let focus_handle = root_view.focus_handle(cx);
-                window.defer(cx, move |window, cx| {
-                    focus_handle.focus(window, cx);
-                });
+                    let focus_handle = root_view.focus_handle(cx);
+                    window.defer(cx, move |window, cx| {
+                        focus_handle.focus(window, cx);
+                    });
 
-                cx.new(|cx| Root::new(root_view, window, cx))
+                    root_view
+                })
             })
             .ok()
         else {
@@ -62,10 +98,17 @@ pub fn create_new_window(title: &str, cx: &mut App) {
             return Ok::<_, anyhow::Error>(());
         };
 
+        // Stored so tray Show and the quit path reach the window without
+        // active_window() (thread-local GetActiveWindow on Windows).
+        cx.update(|cx| note_root_window(window, cx));
+
         window.update(cx, |_, window, _| {
             window.activate_window();
             window.set_window_title(&title);
         })?;
+        // App level (not inside the window update) so the new window reports
+        // as active in the accessibility snapshot.
+        cx.update(crate::accessibility::refresh);
 
         Ok::<_, anyhow::Error>(())
     })

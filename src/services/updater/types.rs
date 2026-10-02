@@ -1,7 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
-use gpui::actions;
+use gpui_kit::actions;
 use serde::{Deserialize, Serialize};
 
 actions!(updater, [CheckForUpdates]);
@@ -50,7 +50,7 @@ pub struct UpdateSnapshot {
     pub cached_asset: Option<PlatformAsset>,
 }
 
-impl gpui::Global for UpdateSnapshot {}
+impl gpui_kit::Global for UpdateSnapshot {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateManifest {
@@ -83,7 +83,7 @@ pub(crate) const UPDATER_PUBLIC_KEY: &[u8; 32] = include_bytes!("../updater_publ
 pub(crate) const MAX_UPDATE_RETRIES: u32 = 3;
 pub(crate) const RETRY_BASE_DELAY_SECS: u64 = 30;
 pub(crate) const STARTUP_CHECK_DELAY_SECS: u64 = 5;
-pub(crate) const PERIODIC_CHECK_INTERVAL_SECS: u64 = 4 * 60 * 60; // 4 hours
+pub(crate) const PERIODIC_CHECK_INTERVAL_SECS: u64 = 4 * 60 * 60;
 
 pub(crate) fn platform_key() -> String {
     let os = if cfg!(target_os = "macos") {
@@ -95,7 +95,7 @@ pub(crate) fn platform_key() -> String {
     } else {
         "unknown"
     };
-    let arch = std::env::consts::ARCH; // "aarch64", "x86_64", etc.
+    let arch = std::env::consts::ARCH;
     format!("{os}-{arch}")
 }
 

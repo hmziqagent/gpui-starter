@@ -1,12 +1,11 @@
-//! Combined asset source: gpui-kit icons plus this crate's embedded themes.
 //! Project assets win on lookup, shadowing same-named component assets.
 
 use std::borrow::Cow;
 
-use gpui::{AssetSource, Result, SharedString};
+use gpui_kit::{AssetSource, Result, SharedString};
 
-/// Embedded theme JSON. The folder is deliberately relative: an absolute
-/// `$CARGO_MANIFEST_DIR` path breaks embed-at-compile-time builds.
+/// The folder is deliberately relative: an absolute `$CARGO_MANIFEST_DIR`
+/// path breaks embed-at-compile-time builds.
 #[derive(rust_embed::RustEmbed)]
 #[folder = "themes"]
 struct ProjectAssets;
@@ -46,9 +45,8 @@ pub fn embedded_themes() -> Vec<(SharedString, String)> {
         .collect()
 }
 
-/// A merged [`AssetSource`] combining gpui-kit assets with project assets.
 pub struct CombinedAssets {
-    component: gpui_kit_assets::Assets,
+    component: gpui_kit::assets::Assets,
 }
 
 impl CombinedAssets {
@@ -56,9 +54,9 @@ impl CombinedAssets {
         Self {
             // Native: unit struct (icons embedded). Wasm: on-demand CDN source.
             #[cfg(not(target_family = "wasm"))]
-            component: gpui_kit_assets::Assets,
+            component: gpui_kit::assets::Assets,
             #[cfg(target_family = "wasm")]
-            component: gpui_kit_assets::Assets::default(),
+            component: gpui_kit::assets::Assets::default(),
         }
     }
 }
@@ -76,7 +74,6 @@ impl AssetSource for CombinedAssets {
         if path.is_empty() || path.split('/').any(|seg| seg == "..") {
             return Ok(None);
         }
-        // Project assets take precedence.
         if let Some(file) = ProjectAssets::get(path) {
             return Ok(Some(file.data));
         }
@@ -85,7 +82,6 @@ impl AssetSource for CombinedAssets {
         if let Some(file) = WasmAssets::get(path) {
             return Ok(Some(file.data));
         }
-        // Fall back to the bundled component assets (icons, etc.).
         self.component.load(path)
     }
 

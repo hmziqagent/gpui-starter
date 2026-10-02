@@ -1,21 +1,25 @@
 mod dev_sections;
 mod notifications_section;
 
-use gpui::{prelude::*, *};
-use gpui_component::{
-    ActiveTheme as _, Selectable as _, Theme, button::Button, label::Label, switch::Switch, v_flex,
+use gpui_kit::component::{
+    ActiveTheme as _, Selectable as _, Theme, ThemeMode, button::Button, label::Label,
+    switch::Switch, v_flex,
 };
+use gpui_kit::{prelude::*, *};
 
+use crate::accessibility::A11yExt as _;
 use crate::app::{self, LOCALE_EN, LOCALE_ZH_CN, LocaleState};
 use crate::app_state;
+use crate::ids::EventId;
 use crate::notifications::{self, NativeNotificationState, NotificationRuntimeSnapshot};
 
 pub struct SettingsPage {
     dark_mode: bool,
     locale: SharedString,
     notifications: NotificationRuntimeSnapshot,
-    /// Log of received event descriptions for the Event Emitter test section.
-    event_log: Vec<String>,
+    /// (event id, rendered description); the id is the row's stable identity,
+    /// which the description string alone cannot provide.
+    event_log: Vec<(EventId, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -41,18 +45,29 @@ impl SettingsPage {
                 cx.notify();
             }),
             cx.observe_global_in::<crate::events::AppEventQueue>(window, |this, _, cx| {
-                // Peek at events without draining — AppRoot owns the drain.
+                // Peek, never drain — AppRoot owns the drain. The observer
+                // fires per emit, so the id dedupe drops already-logged rows.
+                let mut appended = false;
                 if let Some(queue) = cx.try_global::<crate::events::AppEventQueue>() {
                     for event in &queue.0 {
+                        if this.event_log.iter().any(|(id, _)| *id == event.id) {
+                            continue;
+                        }
                         let desc = format!("{:?} ({})", event.kind, event.id);
-                        this.event_log.push(desc);
+                        this.event_log.push((event.id, desc));
+                        appended = true;
                     }
                 }
-                if this.event_log.len() > 20 {
-                    let drain = this.event_log.len() - 20;
-                    this.event_log.drain(0..drain);
+                let drained = this.event_log.len() > 20;
+                if drained {
+                    let excess = this.event_log.len() - 20;
+                    this.event_log.drain(0..excess);
                 }
-                cx.notify();
+                // The observer fires per emit; skip the redraw when every
+                // offered event was already logged and nothing drained.
+                if appended || drained {
+                    cx.notify();
+                }
             }),
         ];
 
@@ -72,6 +87,9 @@ impl Render for SettingsPage {
         let is_dark = self.dark_mode;
         let notifications_snapshot = self.notifications.clone();
         let app_config = app_state::config(cx);
+        let title = crate::i18n::localize("settings_title", None);
+        let dark_mode_label = crate::i18n::localize("settings_dark_mode", None);
+        let language_label = crate::i18n::localize("settings_language", None);
 
         v_flex()
             .min_h_full()
@@ -79,38 +97,43 @@ impl Render for SettingsPage {
             .gap_6()
             .child(
                 div()
+                    .id("settings-title")
+                    .a11y(Role::Heading, title.clone())
+                    .aria_level(1)
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .child(crate::i18n::localize("settings_title", None)),
+                    .child(title),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(Label::new(crate::i18n::localize(
-                        "settings_dark_mode",
-                        None,
-                    )))
-                    .child(Switch::new("dark-mode").checked(is_dark).on_click(
-                        move |checked, _, cx| {
-                            let mode = if *checked {
-                                gpui_component::ThemeMode::Dark
-                            } else {
-                                gpui_component::ThemeMode::Light
-                            };
-                            app::set_theme_mode(mode, cx);
-                        },
-                    )),
+                    .child(Label::new(dark_mode_label.clone()))
+                    .child(
+                        Switch::new("dark-mode")
+                            .accessibility_label(dark_mode_label)
+                            .checked(is_dark)
+                            .on_click(move |checked, _, cx| {
+                                let mode = if *checked {
+                                    ThemeMode::Dark
+                                } else {
+                                    ThemeMode::Light
+                                };
+                                app::set_theme_mode(mode, cx);
+                            }),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(Label::new(crate::i18n::localize("settings_language", None)))
+                    .child(Label::new(language_label.clone()))
                     .child(
                         div()
+                            .id("settings-language-group")
+                            .a11y(Role::Group, language_label)
                             .flex()
                             .items_center()
                             .gap_2()
@@ -118,6 +141,7 @@ impl Render for SettingsPage {
                                 Button::new("settings-language-en")
                                     .outline()
                                     .selected(locale.as_ref() == LOCALE_EN)
+                                    .toggled(locale.as_ref() == LOCALE_EN)
                                     .label(crate::i18n::localize("settings_language_english", None))
                                     .on_click(|_, _, cx| {
                                         app::set_locale(LOCALE_EN, cx);
@@ -127,6 +151,7 @@ impl Render for SettingsPage {
                                 Button::new("settings-language-zh-cn")
                                     .outline()
                                     .selected(locale.as_ref() == LOCALE_ZH_CN)
+                                    .toggled(locale.as_ref() == LOCALE_ZH_CN)
                                     .label(crate::i18n::localize(
                                         "settings_language_simplified_chinese",
                                         None,

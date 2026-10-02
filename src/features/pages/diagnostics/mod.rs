@@ -1,8 +1,9 @@
 mod rows;
 
-use gpui::{prelude::*, *};
-use gpui_component::{button::Button, v_flex};
+use gpui_kit::component::{button::Button, v_flex};
+use gpui_kit::{prelude::*, *};
 
+use crate::accessibility::A11yExt as _;
 use crate::{
     accessibility, app_state, capabilities, crash_report, desktop_actions, error_surface,
     lifecycle::LifecycleState, notifications, shortcuts, storage, telemetry, undo_stack,
@@ -93,6 +94,9 @@ impl Render for DiagnosticsPage {
             .gap_3()
             .child(
                 div()
+                    .id("diagnostics-title")
+                    .a11y(Role::Heading, "Diagnostics")
+                    .aria_level(1)
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
                     .child("Diagnostics"),
@@ -152,25 +156,39 @@ impl Render for DiagnosticsPage {
                     Button::new("diagnostics-trigger-test-panic")
                         .outline()
                         .label("Trigger Test Panic")
-                        .on_click(|_, _, cx| {
-                            cx.dispatch_action(&crate::app::TriggerTestPanic);
+                        .on_click(|_, window, cx| {
+                            // Window-scoped: App::dispatch_action is broken on
+                            // Windows (thread-local active-window lookup).
+                            window.dispatch_action(Box::new(crate::app::TriggerTestPanic), cx);
                         }),
                 )
             })
-            .children(rows)
+            .child(
+                div()
+                    .id("diagnostics-rows")
+                    .a11y(Role::List, "Diagnostic read-outs")
+                    .aria_orientation(Orientation::Vertical)
+                    .children(rows),
+            )
     }
 }
 
-fn row(label: &str, value: &str) -> Div {
-    div().child(
-        div()
-            .flex()
-            .gap_2()
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .child(format!("{label}:")),
-            )
-            .child(div().child(value.to_string())),
-    )
+fn row(label: &str, value: &str) -> Stateful<Div> {
+    let text = format!("{label}: {value}");
+    div()
+        // The label is the row's fixed domain identity: each read-out is
+        // named once here or by a capability key, never localized.
+        .id(ElementId::Name(SharedString::from(format!("diag-{label}"))))
+        .a11y(Role::ListItem, text)
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .child(format!("{label}:")),
+                )
+                .child(div().child(value.to_string())),
+        )
 }

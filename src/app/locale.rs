@@ -1,8 +1,4 @@
-use gpui::{App, Global, SharedString};
-
-// ---------------------------------------------------------------------------
-// Locale state (reactive global for settings page)
-// ---------------------------------------------------------------------------
+use gpui_kit::{App, Global, SharedString};
 
 pub const LOCALE_EN: &str = "en";
 pub const LOCALE_ZH_CN: &str = "zh-CN";

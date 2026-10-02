@@ -1,18 +1,21 @@
-use gpui::{
-    Anchor, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, Theme, TitleBar,
     button::{Button, ButtonVariants as _},
     label::Label,
     menu::{AppMenuBar, DropdownMenu as _},
 };
+use gpui_kit::{
+    Anchor, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Render, Role, SharedString, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
+};
 
+use crate::accessibility::A11yExt;
 use crate::app::{SelectFont, SelectRadius};
 use crate::menus;
 
 pub struct AppTitleBar {
+    title: SharedString,
     app_menu_bar: Entity<AppMenuBar>,
     settings: Entity<SettingsDropdown>,
 }
@@ -23,10 +26,12 @@ impl AppTitleBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let app_menu_bar = menus::init(title, cx);
+        let title: SharedString = title.into();
+        let app_menu_bar = menus::init(title.clone(), cx);
         let settings = cx.new(|cx| SettingsDropdown::new(window, cx));
 
         Self {
+            title,
             app_menu_bar,
             settings,
         }
@@ -34,63 +39,77 @@ impl AppTitleBar {
 }
 
 impl Render for AppTitleBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new()
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Window controls eat a fixed ~105px beside the title bar, so at small
+        // viewports the decorative label is the first thing to yield space.
+        let show_theme_label = window.viewport_size().width >= px(640.);
+        div()
+            .id("title-bar")
+            .a11y(Role::TitleBar, self.title.clone())
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(self.app_menu_bar.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .px_2()
-                    .gap_2()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                TitleBar::new()
                     .child(
-                        Label::new("theme:")
-                            .secondary(cx.theme().theme_name())
-                            .text_sm(),
-                    )
-                    .child(self.settings.clone())
-                    .child(
-                        Button::new("search")
-                            .small()
-                            .ghost()
-                            .compact()
-                            .icon(IconName::Search)
-                            .on_click(|_, _, cx| {
-                                crate::launcher::open_launcher(cx);
-                            }),
+                        // The menu bar scrolls internally once width-bound;
+                        // without flex_1/min_w_0 its content width pushes the
+                        // right cluster out of the window at small sizes.
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .child(self.app_menu_bar.clone()),
                     )
                     .child(
-                        Button::new("bell")
-                            .small()
-                            .ghost()
-                            .compact()
-                            .icon(IconName::Bell)
-                            .on_click(|_, _, cx| {
-                                crate::events::emit(
-                                    crate::events::AppEventKind::Navigate(
-                                        crate::routes::AppRoute::page(
-                                            crate::sidebar::Page::Notifications,
-                                        ),
-                                    ),
-                                    cx,
-                                );
-                            }),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .px_2()
+                            .gap_2()
+                            .flex_shrink_0()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .when(show_theme_label, |this| {
+                                this.child(
+                                    Label::new("theme:")
+                                        .secondary(cx.theme().theme_name())
+                                        .text_sm(),
+                                )
+                            })
+                            .child(self.settings.clone())
+                            .child(
+                                Button::new("search")
+                                    .small()
+                                    .ghost()
+                                    .compact()
+                                    .icon(IconName::Search)
+                                    .accessibility_label(search_a11y_label())
+                                    .on_click(|_, _, cx| {
+                                        crate::launcher::open_launcher(cx);
+                                    }),
+                            )
+                            .child(
+                                Button::new("bell")
+                                    .small()
+                                    .ghost()
+                                    .compact()
+                                    .icon(IconName::Bell)
+                                    .accessibility_label("Notifications")
+                                    .on_click(|_, _, cx| {
+                                        crate::events::emit(
+                                            crate::events::AppEventKind::Navigate(
+                                                crate::routes::AppRoute::page(
+                                                    crate::sidebar::Page::Notifications,
+                                                ),
+                                            ),
+                                            cx,
+                                        );
+                                    }),
+                            ),
                     ),
             )
     }
 }
-
-// ---------------------------------------------------------------------------
-// Settings dropdown (font size, radius, scrollbar)
-// ---------------------------------------------------------------------------
 
 struct SettingsDropdown {
     focus_handle: FocusHandle,
@@ -106,26 +125,28 @@ impl SettingsDropdown {
     fn on_select_font(
         &mut self,
         font_size: &SelectFont,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        Theme::global_mut(cx).font_size = px(font_size.0 as f32);
-        window.refresh();
+        // update() rebuilds the Base projection and refreshes every window,
+        // not just this one; a manual window.refresh() would be partial.
+        Theme::update(cx, |theme| theme.font_size = px(font_size.0 as f32));
     }
 
     fn on_select_radius(
         &mut self,
         radius: &SelectRadius,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        Theme::global_mut(cx).radius = px(radius.0 as f32);
-        Theme::global_mut(cx).radius_lg = if cx.theme().radius > px(0.) {
-            cx.theme().radius + px(2.)
-        } else {
-            px(0.)
-        };
-        window.refresh();
+        Theme::update(cx, |theme| {
+            theme.radius = px(radius.0 as f32);
+            theme.radius_lg = if theme.radius > px(0.) {
+                theme.radius + px(2.)
+            } else {
+                px(0.)
+            };
+        });
     }
 }
 
@@ -137,6 +158,7 @@ impl Render for SettingsDropdown {
 
         div()
             .id("settings-dropdown")
+            .a11y(Role::Group, "Appearance")
             .track_focus(&focus_handle)
             .on_action(cx.listener(Self::on_select_font))
             .on_action(cx.listener(Self::on_select_radius))
@@ -145,6 +167,7 @@ impl Render for SettingsDropdown {
                     .small()
                     .ghost()
                     .icon(IconName::Settings2)
+                    .accessibility_label("Appearance")
                     .dropdown_menu(move |menu, _window, _cx| {
                         menu.scrollable(true)
                             .label("Font Size")
@@ -169,4 +192,13 @@ impl Render for SettingsDropdown {
                     .anchor(Anchor::TopRight),
             )
     }
+}
+
+/// Announced name for the icon-only search button, derived from the
+/// ToggleSearch binding so the modifier matches the platform keymap.
+fn search_a11y_label() -> String {
+    format!(
+        "Search ({})",
+        crate::app::keys::label(crate::app::keys::TOGGLE_SEARCH)
+    )
 }

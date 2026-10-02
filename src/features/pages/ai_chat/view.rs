@@ -1,16 +1,15 @@
-//! [`AiResponseView`] — renders a streaming chat transcript with user bubbles,
-//! assistant markdown, a "Thinking…" placeholder, and a U+258C streaming cursor.
+use gpui_kit::component::{ActiveTheme as _, text::markdown, v_flex};
+use gpui_kit::{prelude::*, *};
 
-use gpui::{prelude::*, *};
-use gpui_component::{ActiveTheme as _, text::markdown, v_flex};
-
-use super::{ChatStreamSource, ChatTurn, Role};
+// Aliased: bare `Role` stays GPUI's accessibility role, which the a11y calls
+// below use unqualified.
+use super::{ChatStreamSource, ChatTurn, Role as ChatRole};
+use crate::accessibility::A11yExt as _;
 
 /// The full-width U+258C (LEFT HALF BLOCK) cursor appended to a streaming
 /// assistant message.
 const STREAMING_CURSOR: char = '\u{258C}';
 
-/// View holding a chat transcript and driving a streaming assistant reply.
 /// Backend-agnostic: tokens arrive via [`Self::append_token`].
 #[derive(Clone)]
 pub struct AiResponseView {
@@ -49,13 +48,12 @@ impl AiResponseView {
     /// no assistant turn yet.
     pub fn append_token(&mut self, token: &str) {
         if let Some(last) = self.turns.last_mut() {
-            if last.role == Role::Assistant {
+            if last.role == ChatRole::Assistant {
                 last.content.push_str(token);
             }
         }
     }
 
-    /// Mark the current assistant reply as complete.
     pub fn finish_streaming(&mut self) {
         if self.is_streaming {
             tracing::debug!(
@@ -87,26 +85,20 @@ impl AiResponseView {
         self.is_streaming = true;
     }
 
-    /// The transcript so far (used by a [`ChatStreamSource`] implementor to build
-    /// the next request).
     pub fn turns(&self) -> &[ChatTurn] {
         &self.turns
     }
 
-    /// Whether an assistant reply is currently streaming.
     pub fn is_streaming(&self) -> bool {
         self.is_streaming
     }
 
-    /// Whether the view is in an error state.
     pub fn has_error(&self) -> bool {
         self.error.is_some()
     }
 }
 
 impl AiResponseView {
-    /// Render the transcript (or the error banner): user bubbles, assistant
-    /// markdown, a "Thinking…" placeholder, and a cursor while streaming.
     pub fn render(&self, _window: &mut Window, cx: &mut App) -> Div {
         let theme = cx.theme();
         let accent = theme.accent;
@@ -127,6 +119,9 @@ impl AiResponseView {
                     .overflow_y_scroll()
                     .child(
                         div()
+                            .id("ai-chat-error-card")
+                            .a11y(Role::Alert, format!("Error. {error}"))
+                            .a11y_live(accesskit::Live::Polite)
                             .flex()
                             .flex_col()
                             .gap_2()
@@ -153,14 +148,20 @@ impl AiResponseView {
             return container;
         }
 
-        let mut messages = v_flex().w_full().p_4().gap_3();
+        let mut messages = v_flex()
+            .id("ai-chat-transcript")
+            .a11y(Role::List, "Chat transcript")
+            .aria_orientation(Orientation::Vertical)
+            .w_full()
+            .p_4()
+            .gap_3();
 
         let last_index = self.turns.len().saturating_sub(1);
         for (i, turn) in self.turns.iter().enumerate() {
             let is_last = i == last_index;
-            let streaming_here = is_last && self.is_streaming && turn.role == Role::Assistant;
+            let streaming_here = is_last && self.is_streaming && turn.role == ChatRole::Assistant;
             match turn.role {
-                Role::User => {
+                ChatRole::User => {
                     messages = messages.child(render_user_bubble(
                         i,
                         &turn.content,
@@ -169,7 +170,7 @@ impl AiResponseView {
                         border,
                     ));
                 }
-                Role::Assistant => {
+                ChatRole::Assistant => {
                     messages = messages.child(render_assistant_message(
                         i,
                         &turn.content,
@@ -191,7 +192,6 @@ impl AiResponseView {
     }
 }
 
-/// Right-aligned user bubble.
 fn render_user_bubble(
     index: usize,
     content: &str,
@@ -200,7 +200,8 @@ fn render_user_bubble(
     border: Hsla,
 ) -> impl IntoElement {
     div()
-        .id(ElementId::Name(format!("ai-chat-user-{}", index).into()))
+        .id(("ai-chat-user", index))
+        .a11y(Role::ListItem, format!("You: {content}"))
         .w_full()
         .flex()
         .justify_end()
@@ -220,20 +221,17 @@ fn render_user_bubble(
         )
 }
 
-/// Assistant turn: "Thinking…" placeholder, markdown body, or markdown + cursor.
 fn render_assistant_message(
     index: usize,
     content: &str,
     streaming: bool,
     muted: Hsla,
 ) -> impl IntoElement {
-    let wrapper = div().id(ElementId::Name(
-        format!("ai-chat-assistant-{}", index).into(),
-    ));
+    // Turns are append-only, so the creation ordinal is a stable identity.
+    let wrapper = div().id(("ai-chat-assistant", index));
 
     if content.is_empty() && streaming {
-        // Thinking placeholder before the first token arrives.
-        wrapper.child(
+        wrapper.a11y(Role::ListItem, "Assistant: thinking").child(
             div()
                 .text_sm()
                 .italic()
@@ -246,7 +244,9 @@ fn render_assistant_message(
         } else {
             content.to_string()
         };
-        wrapper.child(markdown(SharedString::from(display)))
+        wrapper
+            .a11y(Role::ListItem, format!("Assistant: {content}"))
+            .child(markdown(SharedString::from(display)))
     }
 }
 
@@ -264,7 +264,6 @@ where
     S: ChatStreamSource,
     F: FnMut(&mut E, &str) + Send + 'static,
 {
-    // Snapshot the transcript so the source can build its request.
     let messages: Vec<ChatTurn> = view.turns().to_vec();
     let stream = source.stream(&messages, cx);
 

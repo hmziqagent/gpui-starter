@@ -1,24 +1,25 @@
-use gpui::{prelude::*, *};
-use gpui_component::{
-    ActiveTheme as _, Disableable, Icon, IconName, button::Button, h_flex, v_flex,
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable, Icon, IconName, VirtualListScrollHandle, button::Button, h_flex,
+    v_flex,
 };
+use gpui_kit::{prelude::*, *};
 
 use gpui_query::client::QueryClient;
 use gpui_query::core::QueryKeyFilter;
 
+use crate::accessibility::A11yExt as _;
+
 use super::helpers::QuerySort;
 use super::mutations::render_mutations_table;
-use super::registry::render_query_registry;
+use super::registry::{RegistryRowCache, render_query_registry};
 
 pub struct QueryDevToolsV2Page {
     _subscriptions: Vec<Subscription>,
     pub(super) expanded_key: Option<String>,
     pub(super) sort_by: QuerySort,
-    /// Status filter: `None` shows all; `Some(String)` must be a valid
-    /// `QueryStatus` variant name (e.g. "Idle", "Success").
     pub(super) status_filter: Option<String>,
-    /// Scroll handle for the virtualized query registry list.
-    pub(super) scroll_handle: gpui_component::VirtualListScrollHandle,
+    pub(super) scroll_handle: VirtualListScrollHandle,
+    row_cache: RegistryRowCache,
 }
 
 impl QueryDevToolsV2Page {
@@ -34,7 +35,8 @@ impl QueryDevToolsV2Page {
             expanded_key: None,
             sort_by: QuerySort::Key,
             status_filter: None,
-            scroll_handle: gpui_component::VirtualListScrollHandle::new(),
+            scroll_handle: VirtualListScrollHandle::new(),
+            row_cache: RegistryRowCache::default(),
         }
     }
 }
@@ -50,6 +52,7 @@ impl Render for QueryDevToolsV2Page {
                 &self.expanded_key,
                 self.sort_by,
                 &self.status_filter,
+                &mut self.row_cache,
                 &scroll_handle,
                 cx,
             )
@@ -77,14 +80,25 @@ fn render_empty_state(cx: &mut Context<QueryDevToolsV2Page>) -> Div {
         )
         .child(
             div()
+                .id("v2-empty-title")
+                .a11y(Role::Heading, "No V2 Query Resources")
+                .aria_level(1)
                 .text_xl()
                 .font_weight(FontWeight::BOLD)
                 .child("No V2 Query Resources"),
         )
         .child(
-            div().text_sm().text_color(theme.muted_foreground).child(
-                "Navigate to the Query Playground page to create queries, then return here.",
-            ),
+            div()
+                .id("v2-empty-hint")
+                .a11y(
+                    Role::Paragraph,
+                    "Navigate to the Query Playground page to create queries, then return here.",
+                )
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(
+                    "Navigate to the Query Playground page to create queries, then return here.",
+                ),
         )
 }
 
@@ -93,7 +107,8 @@ fn render_dashboard(
     expanded_key: &Option<String>,
     sort_by: QuerySort,
     status_filter: &Option<String>,
-    scroll_handle: &gpui_component::VirtualListScrollHandle,
+    row_cache: &mut RegistryRowCache,
+    scroll_handle: &VirtualListScrollHandle,
     cx: &mut Context<QueryDevToolsV2Page>,
 ) -> Div {
     let theme = cx.theme();
@@ -132,19 +147,30 @@ fn render_dashboard(
         .p_4()
         .child(
             div()
+                .id("v2-devtools-title")
+                .a11y(Role::Heading, "Query V2 DevTools")
+                .aria_level(1)
                 .text_xl()
                 .font_weight(FontWeight::BOLD)
                 .child("Query V2 DevTools"),
         )
         .child(
             div()
+                .id("v2-devtools-subtitle")
+                .a11y(
+                    Role::Paragraph,
+                    "Live diagnostics dashboard for gpui-query-v2's QueryClient.",
+                )
                 .text_sm()
                 .text_color(muted_foreground)
                 .child("Live diagnostics dashboard for gpui-query-v2's QueryClient."),
         );
 
-    let overview = h_flex().gap_4().children(vec![
+    // Cards keep a floor width so narrow containers wrap them 2-up instead
+    // of squeezing one card into a sliver.
+    let overview = h_flex().gap_4().flex_wrap().children(vec![
         stat_card(
+            "v2-stat-total-queries",
             "Total Queries",
             query_count.to_string(),
             radius_lg,
@@ -153,6 +179,7 @@ fn render_dashboard(
             muted_foreground,
         ),
         stat_card(
+            "v2-stat-total-mutations",
             "Total Mutations",
             mutation_count.to_string(),
             radius_lg,
@@ -161,6 +188,7 @@ fn render_dashboard(
             muted_foreground,
         ),
         stat_card(
+            "v2-stat-cache-entries",
             "Cache Entries",
             cache_entries.to_string(),
             radius_lg,
@@ -169,6 +197,7 @@ fn render_dashboard(
             muted_foreground,
         ),
         stat_card(
+            "v2-stat-failed-queries",
             "Failed Queries",
             failed_queries.to_string(),
             radius_lg,
@@ -185,6 +214,7 @@ fn render_dashboard(
         expanded_key,
         sort_by,
         status_filter,
+        row_cache,
         scroll_handle,
         cx,
     );
@@ -202,16 +232,22 @@ fn render_dashboard(
         .child(mutations)
 }
 
+/// Stat read-out card. `id` is the per-card ElementId (static, namespaced);
+/// the visible `label` is not identity and may be reworded freely.
 fn stat_card(
+    id: &'static str,
     label: &str,
     value: String,
     radius_lg: Pixels,
     border: Hsla,
     muted: Hsla,
     muted_foreground: Hsla,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(id)
+        .a11y(Role::Paragraph, format!("{label}: {value}"))
         .flex_1()
+        .min_w(px(110.))
         .rounded(radius_lg)
         .border_1()
         .border_color(border)
@@ -307,6 +343,9 @@ fn render_action_bar(cx: &mut Context<QueryDevToolsV2Page>) -> Div {
         .p_4()
         .child(
             div()
+                .id("v2-actions-title")
+                .a11y(Role::Heading, "Actions")
+                .aria_level(2)
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .mb_2()

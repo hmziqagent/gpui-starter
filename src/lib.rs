@@ -24,6 +24,7 @@
 pub mod app;
 pub mod features;
 pub mod foundation;
+pub mod gallery;
 pub mod persistence;
 pub mod platform;
 pub mod runtime;
@@ -38,17 +39,15 @@ pub mod web;
 pub use app::lifecycle;
 pub use features::command_palette as launcher;
 pub use features::pages as views;
-pub use foundation::validation as input_validation;
 pub use foundation::{errors, ids, time};
 // SQLite migrations are native-only (no rusqlite on wasm).
 #[cfg(not(target_family = "wasm"))]
 pub use persistence::sqlite::db_migrations;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use platform::desktop_shell::tray;
 pub use platform::filesystem::paths;
 pub use platform::input::shortcuts;
 pub use platform::ipc;
-pub use platform::network::websocket;
 pub use platform::process::single_instance;
 pub use runtime::{capabilities, events};
 pub use services::{

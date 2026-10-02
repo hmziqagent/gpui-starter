@@ -1,6 +1,5 @@
-use gpui::*;
-
-use gpui_component::{Selectable, button::Button};
+use gpui_kit::component::{Selectable, button::Button};
+use gpui_kit::*;
 
 use super::dashboard::QueryDevToolsV2Page;
 
@@ -21,7 +20,8 @@ pub(super) fn sort_button(
     let active = current == target;
     let mut btn = Button::new(format!("v2-sort-{:?}", target))
         .outline()
-        .label(label);
+        .label(label)
+        .toggled(active);
     if active {
         btn = btn.selected(true);
     }
@@ -45,7 +45,7 @@ pub(super) fn filter_button(
     };
     let id = format!("v2-filter-{}", target.unwrap_or("all"));
     let target_owned = target.map(|s| s.to_string());
-    let mut btn = Button::new(id).outline().label(label);
+    let mut btn = Button::new(id).outline().label(label).toggled(active);
     if active {
         btn = btn.selected(true);
     }
@@ -71,10 +71,4 @@ pub(super) fn format_cache_age(age_ms: Option<u64>) -> String {
             }
         }
     }
-}
-
-/// Convert pixels to rems assuming a 16px base font size (matches GPUI's
-/// default, but may differ with system config).
-pub(super) fn rems_from_px(px: f32) -> Rems {
-    Rems(px / 16.0)
 }

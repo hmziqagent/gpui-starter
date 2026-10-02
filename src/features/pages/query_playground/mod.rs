@@ -1,26 +1,21 @@
-//! Query V2 Playground — interactive demo of gpui-query-v2: queries, cache and
-//! request policies, retry, mutations, infinite queries, select transforms.
-
 mod queries;
 mod render_sections;
 mod ui_helpers;
 
-use std::sync::Arc;
-
-use gpui::prelude::*;
-use gpui::*;
-
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, VirtualListScrollHandle,
     input::{InputEvent, InputState},
     v_flex,
 };
+use gpui_kit::{prelude::*, *};
 use serde::{Deserialize, Serialize};
 
 use gpui_query::client::QueryClient;
 use gpui_query::core::{
     InfiniteQueryResource, MappedQueryResource, MutationResource, QueryError, QueryResource,
 };
+
+use crate::accessibility::A11yExt as _;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlaygroundUser {
@@ -48,7 +43,6 @@ pub struct HttpFetchResult {
     pub elapsed_ms: u64,
 }
 
-/// Which httpbin request the HTTP Fetching section should perform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HttpFetchKind {
     GetJson,
@@ -100,12 +94,10 @@ impl HttpFetchKind {
 // Page state: one lazily created entity + subscription per demo.
 pub struct QueryPlaygroundPage {
     pub(super) _subscriptions: Vec<Subscription>,
-    // Simple query
     pub(super) simple_query: Option<(
         Entity<QueryResource<PlaygroundUser, QueryError>>,
         Subscription,
     )>,
-    // Cache policy demos
     pub(super) nocache_query: Option<(
         Entity<QueryResource<PlaygroundUser, QueryError>>,
         Subscription,
@@ -118,40 +110,33 @@ pub struct QueryPlaygroundPage {
         Entity<QueryResource<PlaygroundUser, QueryError>>,
         Subscription,
     )>,
-    // Request policy demos
     pub(super) latest_wins_query: Option<(Entity<QueryResource<String, QueryError>>, Subscription)>,
     pub(super) ignore_query: Option<(Entity<QueryResource<String, QueryError>>, Subscription)>,
-    // Retry demo
     pub(super) retry_query: Option<(Entity<QueryResource<String, QueryError>>, Subscription)>,
-    // Mutation demo
     pub(super) mutation_entity: Option<(
         Entity<MutationResource<String, String, QueryError>>,
         Subscription,
     )>,
-    // Mutation input state
     pub(super) mutation_input_state: Entity<InputState>,
-    // Infinite query
     pub(super) infinite_entity: Option<(
         Entity<InfiniteQueryResource<PlaygroundPage, QueryError>>,
         Subscription,
     )>,
-    // Select transform
     pub(super) select_source: Option<Entity<QueryResource<Vec<PlaygroundUser>, QueryError>>>,
     pub(super) select_mapped:
         Option<Entity<MappedQueryResource<Vec<PlaygroundUser>, Vec<String>, QueryError>>>,
     pub(super) _select_subs: Option<(Subscription, Subscription)>,
-    // Imperative fetch
     pub(super) imperative_query: Option<(Entity<QueryResource<String, QueryError>>, Subscription)>,
-    // Real HTTP fetch (reqwest via the tokio runtime)
     pub(super) http_query: Option<(
         Entity<QueryResource<HttpFetchResult, QueryError>>,
         Subscription,
     )>,
-    // UI state
     pub(super) activity_log: Vec<String>,
     pub(super) log_scroll_handle: VirtualListScrollHandle,
-    // Mutation callbacks write here so their log survives past the click handler.
-    pub(super) _callback_log: Arc<std::sync::Mutex<Vec<String>>>,
+    // Mutation callbacks run without a context; they send here and the
+    // page-owned drain task folds the messages into the activity log.
+    pub(super) callback_log_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    _callback_log_drain: Task<()>,
 }
 
 impl QueryPlaygroundPage {
@@ -173,7 +158,22 @@ impl QueryPlaygroundPage {
             },
         ));
 
-        let callback_log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (callback_log_tx, mut callback_log_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Held (not detached): dropping the task cancels it, so the drain dies
+        // with the page entity instead of outliving it.
+        let callback_log_drain = cx.spawn(async move |this, cx| {
+            while let Some(msg) = callback_log_rx.recv().await {
+                if this
+                    .update(cx, |page, cx| {
+                        page.log(msg);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
 
         Self {
             _subscriptions: subs,
@@ -194,11 +194,11 @@ impl QueryPlaygroundPage {
             http_query: None,
             activity_log: Vec::new(),
             log_scroll_handle: VirtualListScrollHandle::new(),
-            _callback_log: callback_log,
+            callback_log_tx,
+            _callback_log_drain: callback_log_drain,
         }
     }
 
-    /// Read the current mutation input text from the InputState entity.
     pub(super) fn mutation_input_value(&self, cx: &App) -> String {
         self.mutation_input_state.read(cx).value().to_string()
     }
@@ -238,12 +238,23 @@ impl Render for QueryPlaygroundPage {
                             .gap_3()
                             .child(
                                 div()
+                                    .id("query-playground-title")
+                                    .a11y(Role::Heading, "Query V2 Playground")
+                                    .aria_level(1)
                                     .text_2xl()
                                     .font_weight(FontWeight::BOLD)
                                     .child("Query V2 Playground"),
                             )
                             .child(
                                 div()
+                                    .id("query-playground-intro")
+                                    .a11y(
+                                        Role::Paragraph,
+                                        "Interactive demo of every gpui-query-v2 feature: queries, \
+                                         cache policies, request policies, retry, mutations, \
+                                         infinite queries, select transforms, and imperative fetch \
+                                         with signal cancellation.",
+                                    )
                                     .max_w(px(800.))
                                     .text_sm()
                                     .text_color(muted_foreground)

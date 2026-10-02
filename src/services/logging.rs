@@ -1,4 +1,4 @@
-use gpui::{App, BorrowAppContext as _, Global};
+use gpui_kit::{App, BorrowAppContext as _, Global};
 #[cfg(not(target_family = "wasm"))]
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -22,7 +22,6 @@ pub struct LoggingState {
 
 impl Global for LoggingState {}
 
-/// Native: rolling daily file appender + stderr layer.
 #[cfg(not(target_family = "wasm"))]
 pub fn initialize(cx: &mut App) {
     let paths = crate::app_state::paths(cx);
@@ -100,7 +99,6 @@ fn initialize_state(
                 enabled: true,
                 log_dir,
                 file_prefix,
-                // No file appender guard exists on wasm.
                 has_guard: cfg!(not(target_family = "wasm")),
                 last_error: None,
             }
@@ -117,7 +115,6 @@ fn initialize_state(
     crate::capabilities::set(
         "file_logging",
         crate::capabilities::CapabilityStatus {
-            // No rolling file appender on wasm — console/devtools only.
             supported: cfg!(not(target_family = "wasm")),
             enabled: runtime.enabled,
             degraded: runtime.last_error.is_some(),

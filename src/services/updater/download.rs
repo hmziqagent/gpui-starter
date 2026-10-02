@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::types::*;
-use gpui::App;
+use gpui_kit::App;
 #[cfg(not(target_family = "wasm"))]
-use gpui::AsyncApp;
+use gpui_kit::AsyncApp;
 #[cfg(not(target_family = "wasm"))]
-use gpui::UpdateGlobal as _;
+use gpui_kit::UpdateGlobal as _;
 
 pub fn download_update(cx: &mut App) {
     let current = super::snapshot(cx);
@@ -86,8 +86,6 @@ enum DownloadOutcome {
     PermanentFailure(String),
 }
 
-/// Resolve asset → streaming download → Ed25519 verify → codesign (macOS).
-/// Verification failures come back as `Ok(PermanentFailure)` to suppress retry.
 #[cfg(not(target_family = "wasm"))]
 async fn run_download(
     version: String,
@@ -223,8 +221,7 @@ async fn run_download(
         }
     });
 
-    // Poll progress and push 10%-step updates into GPUI state; the GPUI
-    // background-executor timer avoids a fresh tokio task per tick.
+    // The GPUI background-executor timer avoids a fresh tokio task per tick.
     let mut last_progress: u32 = 0;
     loop {
         let cur = progress.load(Ordering::Relaxed);

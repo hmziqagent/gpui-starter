@@ -1,35 +1,29 @@
 [workspace]
-members = [
-	".",
-]
 
 [workspace.dependencies]
-# gpui-form: git-sourced from the CANONICAL upstream stayhydated/gpui-form
-# (NOT vendored in-tree; crates.io still ships only the old 0.5.1
-# architecture). master @216af496 ("fix gpui-kit 0.6.0 CI", CI-green
-# 2026-09-07) is kit-0.6.0-native — its gpui resolves through the registry to
-# gpui-pre, unified with ours; its own [patch] section is IGNORED downstream.
-# The two consumed crates point at the SAME rev so cargo resolves them from
-# one checkout (internal crates come along transitively). The freeoxide fork
-# @2604a5e (0.5.2 zed-git line) stays frozen as the Phase-1 rollback path.
-gpui-form = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b2551d1b7be83b12e519cd0c908c28ff" }
-gpui-form-collection = { git = "https://github.com/stayhydated/gpui-form", rev = "216af496b2551d1b7be83b12e519cd0c908c28ff" }
+# gpui-form from the freeoxide fork; rev = the migration branch HEAD on
+# sync/gpui-kit-0.7.0.
+gpui-form = { git = "https://github.com/freeoxide/gpui-form", rev = "f7e2fb0b30c1285638f1a877489dc03ad084319a" }
 
-# GPUI ecosystem — crates.io `gpui-pre` is the published snapshot of zed gpui
-# (PACKAGE name gpui-pre, lib name stays `gpui`); gpui-kit 0.6.4 builds on it.
-# gpui-kit is listed directly because gpui-form's derives emit ::gpui_kit::
-# paths into consuming crates; gpui-kit-assets replaces gpui-component-assets
-# (the old longbridge/gpui-component git URL is retired with the zed patches).
-gpui = { package = "gpui-pre", version = "0.3.5" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = [
-    "font-kit",
-    "x11",
-    "wayland",
-    "runtime_shaders",
-] }
-gpui-kit = "0.6.4"
-gpui-component = "0.6.4"
-gpui-kit-assets = "0.6.4"
+# GPUI ecosystem — gpui-kit is the single application-facing dependency.
+# crates.io `gpui-pre` is the published snapshot of zed gpui (PACKAGE name
+# gpui-pre, lib name stays `gpui`); gpui-kit 0.7.0 builds on it, pins the
+# whole gpui-pre-* snapshot family to =0.3.7, and enables
+# font-kit/x11/wayland/runtime_shaders on gpui-pre-platform itself, so
+# backend selection needs no direct platform dependency. GPUI itself is
+# `use gpui_kit::*`; the layers are `gpui_kit::component` / `base` /
+# `assets` / `platform`. qa_migration.rs fails the build if a source file
+# imports any of those crates by their own names.
+# gpui-kit and gpui are direct deps for the same reason: the pinned
+# gpui-form rev's derives emit both ::gpui_kit::component paths and
+# ::gpui::Entity/Window/Context into consuming crates (see
+# crates/gpui-form-codegen/src/implementations/*.rs), so hand-written code
+# uses kit paths only while the macros still need both crate names.
+# Never add a direct `accesskit` dep: the kit re-exports gpui's accesskit
+# (0.24.x) and a separately-versioned accesskit is type-incompatible with
+# the bridge.
+gpui = { package = "gpui-pre", version = "0.3.7" }
+gpui-kit = "0.7.0"
 
 # Serialization & data
 anyhow = "1"
@@ -56,20 +50,18 @@ tracing-subscriber = { version = "0.3", features = [
 # i18n
 rust-i18n = "3"
 regex = "1"
-# stayhydated es-fluent 0.18.1 family (upstream master pins this exact rev;
-# crates.io maxes at an older line). All four from ONE checkout so our
-# directly-used satellites stay in lockstep with the runtime gpui-form uses.
-es-fluent = { git = "https://github.com/stayhydated/es-fluent", rev = "94efb551ede72c9e7da4bbdf97d5eecb5ea09982", features = ["derive"] }
-es-fluent-build = { git = "https://github.com/stayhydated/es-fluent", rev = "94efb551ede72c9e7da4bbdf97d5eecb5ea09982" }
-es-fluent-lang = { git = "https://github.com/stayhydated/es-fluent", rev = "94efb551ede72c9e7da4bbdf97d5eecb5ea09982" }
-es-fluent-manager-embedded = { git = "https://github.com/stayhydated/es-fluent", rev = "94efb551ede72c9e7da4bbdf97d5eecb5ea09982" }
+# es-fluent 0.16 family from crates.io — the line the migrated gpui-form
+# graph resolves; one copy keeps our directly-used satellites in lockstep.
+es-fluent = { version = "0.16", features = ["derive"] }
+es-fluent-build = "0.16"
+es-fluent-lang = "0.16"
+es-fluent-manager-embedded = "0.16"
 
 # Validation
-# stayhydated koruma 0.11.0 family (crates.io maxes at 0.10; gpui-form
-# @216af496 consumes 0.11 from this exact rev). All three from ONE checkout.
-koruma = { git = "https://github.com/stayhydated/koruma", rev = "2ff495d8dc04794f0bcb2eb3c1a4a3c28e55a274", features = ["fluent"] }
-koruma-collection = { git = "https://github.com/stayhydated/koruma", rev = "2ff495d8dc04794f0bcb2eb3c1a4a3c28e55a274", features = ["full-fluent"] }
-koruma-derive-core = { git = "https://github.com/stayhydated/koruma", rev = "2ff495d8dc04794f0bcb2eb3c1a4a3c28e55a274" }
+# koruma 0.9 family from crates.io — the line the migrated gpui-form graph
+# resolves (gpui-form-derive 0.9 emits consumer-resolved koruma code).
+koruma = { version = "0.9", features = ["fluent"] }
+koruma-collection = { version = "0.9", features = ["full-fluent"] }
 
 # Proc-macro infrastructure
 darling = "0.23"
@@ -135,10 +127,7 @@ gpui.workspace = true
 # `^0.1.4`-only pin Cargo can silently drop a future patch as
 # `[[patch.unused]]` and build the registry version regardless.
 gpui-query = { version = ">=0.1.4, <0.3.0", features = ["hook"] }
-gpui_platform.workspace = true
-gpui-component.workspace = true
 gpui-kit.workspace = true
-gpui-kit-assets.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -156,15 +145,8 @@ es-fluent-lang.workspace = true
 es-fluent-manager-embedded.workspace = true
 strum.workspace = true
 gpui-form.workspace = true
-gpui-form-collection.workspace = true
 # user-notify / notify-rust live in the not-wasm target section (D-Bus/mac
 # notification frameworks have no wasm32-unknown-unknown story).
-# Optional: XDG Desktop Portal notification backend (enable with --features notifications-portal).
-# `notification` is required (ashpd gates its whole desktop::notification module behind it).
-# `async-io` (NOT tokio) is required: notify-rust already forces zbus/async-io, and zbus forbids
-# enabling both async-io and tokio. ashpd on async-io drives zbus's own background thread, so its
-# futures are safe to await directly (like notify-rust's show_async).
-ashpd = { version = "0.13", optional = true, default-features = false, features = ["notification", "async-io"] }
 thiserror = "2.0.18"
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -198,7 +180,6 @@ opentelemetry_sdk = { version = "0.24.1", optional = true, features = [
 rfd = "0.15.4"
 notify = "8.2.0"
 undo = "0.52.0"
-accesskit = "0.21.1"
 sys-locale = "0.3"
 flume = "0.11"
 fuzzy-matcher = "0.3"
@@ -206,10 +187,16 @@ rust-embed = "8"
 
 [dev-dependencies]
 insta.workspace = true
+# Test-only: TestAppContext + deterministic timers for the config-store
+# debounce tests. Dev-dep features never reach production or wasm builds.
+gpui = { package = "gpui-pre", version = "0.3.7", features = ["test-support"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
 global-hotkey = "0.8"
+# user-notify is the macOS backend only; its Windows backend lacks action
+# support, so Windows sends through src/platform/win_toast.rs instead.
+user-notify = "0.4.2"
 block2 = "0.6"
 objc2 = { version = "0.6", features = ["exception"] }
 objc2-foundation = { version = "0.3.0", default-features = false, features = [
@@ -231,6 +218,51 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 raw-window-handle = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Optional: XDG Desktop Portal notification backend (enable with --features
+# notifications-portal). Linux-only table: ashpd is Unix-only (std::os::fd) and
+# the portal path targets Flatpak/Snap runs; other targets compile the feature
+# to a no-op. `notification` is required (ashpd gates its whole
+# desktop::notification module behind it). `async-io` (NOT tokio) is required:
+# notify-rust already forces zbus/async-io, and zbus forbids enabling both
+# async-io and tokio. ashpd on async-io drives zbus's own background thread, so
+# its futures are safe to await directly (like notify-rust's show_async).
+ashpd = { version = "0.13", optional = true, default-features = false, features = [
+    "notification",
+    "async-io",
+] }
+
+# Unpackaged Win32 apps need a Start Menu shortcut carrying the toast AUMID or
+# Windows silently drops every toast; see src/platform/toast_identity.rs. Same
+# windows crate copy user-notify 0.4 already pulls in. UI_Notifications +
+# Data_Xml_Dom + Foundation_Collections cover the interactive toast path in
+# src/platform/win_toast.rs; quick-xml escapes the toast XML (same helper
+# user-notify uses).
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = { version = "0.24", default-features = false }
+# Select multiplexes tray-icon's two global crossbeam channels onto the one
+# gpui-tray-events drain thread.
+crossbeam-channel = "0.5"
+global-hotkey = "0.8"
+quick-xml = "0.37"
+# Thin safe HKCU wrapper for the gpui-starter:// protocol registration in
+# src/platform/deep_link_registration.rs (already locked at 0.6 transitively).
+windows-registry = "0.6"
+windows = { version = "0.61", features = [
+    "Data_Xml_Dom",
+    "Foundation_Collections",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "UI_Notifications",
+] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
@@ -243,10 +275,11 @@ libc = "0.2"
 single-instance = "0.3.3"
 interprocess = "2.4.2"
 network-interface = "2.0.3"
-keyring = { version = "3.6.3", features = ["apple-native"] }
+# Per-platform credential stores; a platform left without its store feature
+# silently falls back to keyring's per-entry mock (writes vanish, reads miss).
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 notify-rust = "4.17.0"
-user-notify = "0.4.2"
 # `open` hits compile_error!("open is not supported on this platform") and
 # `arboard` has no wasm clipboard backend (its `platform` module is
 # linux/osx/windows only) — both hard-fail on wasm32-unknown-unknown
@@ -258,8 +291,9 @@ arboard = { version = "3.6.1", features = ["image-data"] }
 # src/services/logging.rs.
 tracing-appender = "0.2"
 # Native-only tokio features re-added on top of the workspace base
-# (rt + sync + time): `net` and `io-util` have no wasm implementation.
-tokio = { workspace = true, features = ["io-util", "net"] }
+# (rt + sync + time): `net` and `io-util` have no wasm implementation, and
+# `rt-multi-thread` (tokio_runtime's dedicated I/O runtime) needs threads.
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
 
 # Web (wasm32-unknown-unknown) dependencies.
 [target.'cfg(target_family = "wasm")'.dependencies]

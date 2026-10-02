@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{App, Global};
+use gpui_kit::{App, Global};
 
 /// Dedicated tokio runtime for I/O-bound work: GPUI's executor is not a tokio
 /// runtime, so tokio-dependent code must run via `runtime.spawn(...)` here.
@@ -66,20 +66,17 @@ impl Default for TokioRuntime {
     }
 }
 
-/// GPUI Global that holds the shared tokio runtime.
 pub struct TokioRuntimeGlobal(pub TokioRuntime);
 
 impl Global for TokioRuntimeGlobal {}
 
-/// Borrow the shared tokio runtime handle, or `None` when absent (callers
-/// should degrade gracefully).
+/// Callers should degrade gracefully when this returns `None`.
 pub fn handle(cx: &App) -> Option<Arc<tokio::runtime::Runtime>> {
     cx.try_global::<TokioRuntimeGlobal>()
         .map(|g| g.0.runtime.clone())
 }
 
-/// Borrow the runtime handle and HTTP client together, or `None` when absent
-/// (callers should degrade gracefully).
+/// Callers should degrade gracefully when this returns `None`.
 pub fn runtime_and_client(cx: &App) -> Option<(Arc<tokio::runtime::Runtime>, reqwest::Client)> {
     cx.try_global::<TokioRuntimeGlobal>()
         .map(|g| (g.0.runtime.clone(), g.0.http_client.clone()))

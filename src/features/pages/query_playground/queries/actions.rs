@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use gpui_query::core::QueryError;
 use gpui_query::hook::{
@@ -248,20 +248,16 @@ impl QueryPlaygroundPage {
         self.log(format!("Mutation: mutate_with_callbacks('{}')", vars));
 
         let exec = cx.background_executor().clone();
-        let log_for_success = self._callback_log.clone();
-        let log_for_error = self._callback_log.clone();
+        // Callbacks fire without a context; send into the page-owned channel
+        // so the drain task can log them on the entity (see `new`).
+        let tx_for_success = self.callback_log_tx.clone();
+        let tx_for_error = self.callback_log_tx.clone();
         let callbacks = MutationCallbacks::new()
             .on_success(move |data: &String| {
-                log_for_success
-                    .lock()
-                    .unwrap()
-                    .push(format!("on_success: {}", data));
+                let _ = tx_for_success.send(format!("on_success: {}", data));
             })
             .on_error(move |err: &QueryError| {
-                log_for_error
-                    .lock()
-                    .unwrap()
-                    .push(format!("on_error: {}", err));
+                let _ = tx_for_error.send(format!("on_error: {}", err));
             });
 
         mutate_with_callbacks(
@@ -277,8 +273,6 @@ impl QueryPlaygroundPage {
             callbacks,
             cx,
         );
-
-        self.log("Mutation: callbacks registered (on_success, on_error)");
     }
 
     pub(in super::super) fn reset_mutation(&mut self, cx: &mut Context<Self>) {
@@ -456,7 +450,6 @@ impl QueryPlaygroundPage {
         }
     }
 
-    // HTTP Fetching: real requests via reqwest over the tokio runtime.
     pub(in super::super) fn fetch_http(&mut self, kind: HttpFetchKind, cx: &mut Context<Self>) {
         self.ensure_http_query(cx);
         let Some((entity, _)) = self.http_query.as_ref() else {
@@ -528,11 +521,7 @@ impl QueryPlaygroundPage {
     }
 }
 
-// Native: reqwest needs the driven tokio runtime, so requests are spawned onto
-// it and the JoinHandle awaited; wasm bridges through [`spawn_http_local`].
-
-/// Perform the raw HTTP exchange: send the request and buffer the body. On
-/// wasm the future is `!Send` — await it only from GPUI's local executor.
+/// On wasm the future is `!Send` — await it only from GPUI's local executor.
 async fn exchange(
     client: reqwest::Client,
     kind: HttpFetchKind,
@@ -582,7 +571,6 @@ pub(super) async fn run_http(
         exchange(client.clone(), kind, url.clone()).await?
     };
 
-    // Pretty-print JSON bodies; truncate long bodies for display.
     let is_json = matches!(kind, HttpFetchKind::GetJson | HttpFetchKind::PostJson);
     let body = if is_json {
         serde_json::from_str::<serde_json::Value>(&raw)
@@ -617,7 +605,7 @@ pub(super) fn spawn_http_local(
     client: &reqwest::Client,
     runtime: &std::sync::Arc<tokio::runtime::Runtime>,
     kind: HttpFetchKind,
-) -> gpui::Task<Result<HttpFetchResult, QueryError>> {
+) -> Task<Result<HttpFetchResult, QueryError>> {
     let client = client.clone();
     let runtime = runtime.clone();
     cx.spawn(async move |_this, _cx| run_http(&client, &runtime, kind).await)

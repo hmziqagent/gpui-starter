@@ -1,13 +1,9 @@
-use gpui::{App, KeyBinding};
-use gpui_component::{ActiveTheme as _, Root, WindowExt as _, text::markdown};
+use gpui_kit::component::{ActiveTheme as _, Root, WindowExt as _, text::markdown};
+use gpui_kit::{App, KeyBinding};
 
 use crate::app::actions::*;
 use crate::app::locale::set_locale;
 use crate::app::theme::set_theme_mode;
-
-// ---------------------------------------------------------------------------
-// Init
-// ---------------------------------------------------------------------------
 
 /// Time and log a named startup step; the log name always matches the step.
 macro_rules! startup_step {
@@ -52,9 +48,9 @@ pub fn init(cx: &mut App) {
 
     crate::lifecycle::install_panic_hook();
 
-    // Must precede any gpui-component usage.
+    // Must precede any kit usage.
     startup_step!(cx, "component_init", {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
     });
 
     crate::lifecycle::set_stage(crate::lifecycle::LifecycleStage::Starting, cx);
@@ -65,7 +61,6 @@ pub fn init(cx: &mut App) {
     // Marker data must be user-owned, never $TMPDIR (symlink planting);
     // install it before the marker write so startup crashes stay detectable.
     crate::lifecycle::set_app_data_dir(crate::app_state::paths(cx).data_dir.clone());
-    // Detect the previous run's marker BEFORE writing this launch's own.
     let previous_crash = crate::lifecycle::check_previous_crash();
     if let Some(marker) = &previous_crash {
         tracing::warn!(
@@ -78,6 +73,19 @@ pub fn init(cx: &mut App) {
 
     startup_step!(cx, "logging_init", {
         crate::logging::initialize(cx);
+    });
+
+    // Best-effort per-user gpui-starter:// registration; never block startup.
+    #[cfg(target_os = "windows")]
+    startup_step!(cx, "deep_link_registration", {
+        if let Err(reason) = crate::platform::deep_link_registration::ensure_deep_link_registered()
+        {
+            tracing::warn!(
+                target: "gpui_starter::deep_link_registration",
+                %reason,
+                "deep-link scheme registration failed; continuing without it"
+            );
+        }
     });
 
     startup_step!(cx, "capabilities_init", {
@@ -106,7 +114,6 @@ pub fn init(cx: &mut App) {
         );
     }
 
-    // Initialize es-fluent i18n for app and form text
     let system_locale = crate::i18n::detect_system_locale();
     tracing::info!(
         target: "gpui_starter::startup",
@@ -132,12 +139,12 @@ pub fn init(cx: &mut App) {
     // register before any registry lookup, on native and wasm alike.
     let persisted_theme = persisted.theme.clone();
     crate::app::theme::register_embedded_themes(cx);
-    if let Some(theme) = gpui_component::ThemeRegistry::global(cx)
+    if let Some(theme) = gpui_kit::component::ThemeRegistry::global(cx)
         .themes()
         .get(persisted_theme.as_str())
         .cloned()
     {
-        gpui_component::Theme::global_mut(cx).apply_config(&theme);
+        gpui_kit::component::Theme::update(cx, |t| t.apply_config(&theme));
     }
 
     // Hot reload of themes/ is dev-checkout-only: the watcher create_dir_all()s
@@ -148,7 +155,7 @@ pub fn init(cx: &mut App) {
         if themes_dir.exists() {
             // watch_dir never returns Err (it logs internally); on_load
             // re-registers embedded themes after the initial reload.
-            let _ = gpui_component::ThemeRegistry::watch_dir(
+            let _ = gpui_kit::component::ThemeRegistry::watch_dir(
                 themes_dir,
                 cx,
                 crate::app::theme::register_embedded_themes,
@@ -156,7 +163,7 @@ pub fn init(cx: &mut App) {
 
             // Watcher reloads clear the registry without re-running on_load,
             // so a deleted dev theme file must not strand the embedded set.
-            cx.observe_global::<gpui_component::ThemeRegistry>(|cx| {
+            cx.observe_global::<gpui_kit::component::ThemeRegistry>(|cx| {
                 crate::app::theme::ensure_embedded_themes(cx);
             })
             .detach();
@@ -164,11 +171,12 @@ pub fn init(cx: &mut App) {
     }
 
     if let Some(show) = persisted.scrollbar_show {
-        gpui_component::Theme::global_mut(cx).scrollbar_mode = show;
+        // set_scrollbar_mode routes through Theme::update, which projects the
+        // mode onto the Base scrollbar and refreshes windows.
+        gpui_kit::component::Theme::set_scrollbar_mode(show, cx);
     }
-    cx.refresh_windows();
 
-    cx.observe_global::<gpui_component::Theme>(move |cx| {
+    cx.observe_global::<gpui_kit::component::Theme>(move |cx| {
         let theme_name = cx.theme().theme_name().to_string();
         let scrollbar_show = cx.theme().scrollbar_mode;
         crate::app_state::update_config(cx, |config| {
@@ -178,16 +186,14 @@ pub fn init(cx: &mut App) {
     })
     .detach();
 
-    // Theme switching actions
     cx.on_action(|switch: &SwitchTheme, cx| {
-        if let Some(config) = gpui_component::ThemeRegistry::global(cx)
+        if let Some(config) = gpui_kit::component::ThemeRegistry::global(cx)
             .themes()
             .get(&switch.0)
             .cloned()
         {
-            gpui_component::Theme::global_mut(cx).apply_config(&config);
+            gpui_kit::component::Theme::update(cx, |theme| theme.apply_config(&config));
         }
-        cx.refresh_windows();
     });
     cx.on_action(|switch: &SwitchThemeMode, cx| {
         set_theme_mode(switch.0, cx);
@@ -196,7 +202,6 @@ pub fn init(cx: &mut App) {
         set_locale(&locale.0, cx);
     });
 
-    crate::launcher::init(cx);
     cx.set_global(crate::events::AppEventQueue::default());
     cx.set_global(crate::launcher::LauncherOpen(false));
     startup_step!(cx, "runtime_services_init", {
@@ -208,6 +213,9 @@ pub fn init(cx: &mut App) {
             crate::services::tokio_runtime::TokioRuntime::new(),
         ));
         crate::connectivity::initialize(cx);
+        // Probe once at startup so the status bar and the update checker see
+        // a real state instead of Unknown (the updater refuses while Unknown).
+        crate::connectivity::check_now(cx);
         crate::desktop_actions::initialize(cx);
         crate::accessibility::initialize(cx);
         crate::secure_storage::initialize(cx);
@@ -258,6 +266,10 @@ pub fn init(cx: &mut App) {
 
         crate::telemetry::initialize(cx);
     });
+    // Window counts in the a11y snapshot go stale on close; refresh keeps the
+    // diagnostics page honest.
+    cx.on_window_closed(|cx, _| crate::accessibility::refresh(cx))
+        .detach();
     crate::crash_report::initialize(cx);
     if previous_crash.is_some() {
         crate::crash_report::upload_pending_reports(cx);
@@ -279,15 +291,14 @@ pub fn init(cx: &mut App) {
         crate::platform::web::install(cx);
     });
 
-    // Key bindings
     cx.bind_keys([
-        KeyBinding::new("cmd-k", ToggleSearch, None),
+        KeyBinding::new(crate::app::keys::TOGGLE_SEARCH, ToggleSearch, None),
         KeyBinding::new("/", ToggleSearch, None),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("secondary-q", Quit, None),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("alt-f4", Quit, None),
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         KeyBinding::new("ctrl-r", Restart, None),
     ]);
 
@@ -313,7 +324,6 @@ pub fn init(cx: &mut App) {
                 crate::desktop_actions::shutdown(cx);
                 crate::lifecycle::set_shutdown_step("unregister_shortcuts", cx);
                 crate::shortcuts::shutdown(cx);
-                // Flush any debounced config changes before continuing shutdown.
                 crate::lifecycle::set_shutdown_step("flush_config", cx);
                 crate::app_state::force_save(cx);
                 crate::lifecycle::set_shutdown_step("flush_storage", cx);
@@ -335,24 +345,27 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &Restart, cx| {
-        // Flag the re-exec, then reuse the full Quit shutdown path so every
+        // Flag the relaunch, then reuse the full Quit shutdown path so every
         // flush runs before the process exits.
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             crate::app::request_reload();
             crate::lifecycle::set_shutdown_step("restart", cx);
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = cx;
             tracing::warn!(
                 target: "gpui_starter::reload",
-                "restart requested on a platform without exec-reload support; ignoring"
+                "restart requested on a platform without a native relaunch backend; ignoring"
             );
-            return;
         }
-        #[cfg(unix)]
-        cx.dispatch_action(&Quit);
+        #[cfg(any(unix, windows))]
+        {
+            // The handler window is mid-teardown or on the update stack, so
+            // defer Quit, routed at the recorded root (active is the palette).
+            cx.defer(crate::app::window::dispatch_quit);
+        }
     });
 
     cx.on_action(|_: &About, cx| {
@@ -362,11 +375,12 @@ pub fn init(cx: &mut App) {
                     .update(cx, |_, window, cx| {
                         window.defer(cx, |window, cx| {
                             window.open_alert_dialog(cx, |alert, _, _| {
-                                alert.title("About").description(markdown(
-                                    "GPUI Starter\n\n\
-                                    Version 0.1.0\n\n\
-                                    A boilerplate for GPUI desktop apps.",
-                                ))
+                                // env!, not a literal: must track Cargo.toml
+                                // and features/pages/about.rs.
+                                alert.title("About").description(markdown(format!(
+                                    "GPUI Starter\n\nVersion {}\n\nA boilerplate for GPUI desktop apps.",
+                                    env!("CARGO_PKG_VERSION")
+                                )))
                             });
                         });
                     })

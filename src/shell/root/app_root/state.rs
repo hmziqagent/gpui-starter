@@ -1,5 +1,6 @@
-use gpui::{prelude::*, *};
+use gpui_kit::{prelude::*, *};
 
+use crate::gallery::GalleryPage;
 use crate::sidebar::Page;
 use crate::title_bar::AppTitleBar;
 use crate::views::{
@@ -27,6 +28,7 @@ pub struct AppRoot {
     pub(crate) query_playground_page: Entity<QueryPlaygroundPage>,
     pub(crate) query_devtools_v2_page: Entity<QueryDevToolsV2Page>,
     pub(crate) about_page: Entity<AboutPage>,
+    pub(crate) gallery_page: Entity<GalleryPage>,
 
     /// When true, the error fallback view replaces the active page; set on a
     /// render panic, cleared by "Reload Page" or navigation.
@@ -51,13 +53,13 @@ impl AppRoot {
         let query_playground_page = cx.new(|cx| QueryPlaygroundPage::new(window, cx));
         let query_devtools_v2_page = cx.new(|cx| QueryDevToolsV2Page::new(window, cx));
         let about_page = cx.new(|_| AboutPage::new());
+        let gallery_page = cx.new(|cx| GalleryPage::new(window, cx));
 
         // Register the v2 QueryClient global so DevTools/Playground pages can observe it.
         if !cx.has_global::<gpui_query::client::QueryClient>() {
             cx.set_global(gpui_query::client::QueryClient::new());
         }
 
-        // React to app-wide events coming from launcher/deep links.
         cx.observe_global::<events::AppEventQueue>(|this, cx| {
             for event in events::drain(cx) {
                 match event.kind {
@@ -128,13 +130,7 @@ impl AppRoot {
         notify_on::<crate::session::SessionSnapshot>(cx).detach();
         // update_config already debounces; hand it the latest bounds directly.
         cx.observe_window_bounds(window, |_, window, cx| {
-            let bounds = window.window_bounds().get_bounds();
-            let persisted = crate::app_state::PersistedWindowBounds {
-                x: bounds.origin.x.into(),
-                y: bounds.origin.y.into(),
-                width: bounds.size.width.into(),
-                height: bounds.size.height.into(),
-            };
+            let persisted = super::persisted_bounds(window.window_bounds().get_bounds());
             crate::app_state::update_config(cx, |config| {
                 config.window_bounds = Some(persisted);
             });
@@ -145,7 +141,6 @@ impl AppRoot {
         let (active_route, collapsed) =
             crate::app_state::with_config(cx, |c| (c.active_route.clone(), c.sidebar_collapsed));
 
-        // Keyboard shortcuts: Cmd+1..9 to jump to sidebar pages.
         let pages = Page::all();
         cx.bind_keys(
             pages
@@ -154,7 +149,7 @@ impl AppRoot {
                 .filter_map(|(i, _)| {
                     if i < 9 {
                         Some(KeyBinding::new(
-                            &format!("cmd-{}", i + 1),
+                            &crate::app::keys::page(i),
                             NavigateToPage(i),
                             None,
                         ))
@@ -162,6 +157,11 @@ impl AppRoot {
                         None
                     }
                 })
+                .chain(std::iter::once(KeyBinding::new(
+                    crate::app::keys::TOGGLE_SIDEBAR,
+                    super::super::actions::ToggleSidebar,
+                    None,
+                )))
                 .collect::<Vec<_>>(),
         );
 
@@ -179,6 +179,7 @@ impl AppRoot {
             query_playground_page,
             query_devtools_v2_page,
             about_page,
+            gallery_page,
             render_error: false,
             error_page: None,
         }
@@ -187,7 +188,6 @@ impl AppRoot {
     /// Page view with error-boundary handling: a render panic since the last
     /// frame swaps in [`RenderErrorPage`]; navigation or "Reload Page" clears it.
     pub(crate) fn active_page_view(&mut self, cx: &mut Context<Self>) -> AnyView {
-        // Check if a panic occurred since the last render.
         if crate::lifecycle::take_render_panic() {
             tracing::warn!(
                 target: "gpui_starter::root",
@@ -199,7 +199,6 @@ impl AppRoot {
             self.error_page = Some(cx.new(|_| RenderErrorPage::new(summary)));
         }
 
-        // If the error boundary is active, show the fallback view.
         if self.render_error {
             if let Some(ref error_page) = self.error_page {
                 return error_page.clone().into();
@@ -209,7 +208,6 @@ impl AppRoot {
         self.unchecked_active_page_view()
     }
 
-    /// Return the active page view without checking for render panics.
     pub(crate) fn unchecked_active_page_view(&self) -> AnyView {
         match self.active_route.page_for_render() {
             Page::Home => self.home_page.clone().into(),
@@ -221,7 +219,17 @@ impl AppRoot {
             Page::QueryPlayground => self.query_playground_page.clone().into(),
             Page::QueryDevToolsV2 => self.query_devtools_v2_page.clone().into(),
             Page::About => self.about_page.clone().into(),
+            Page::Gallery => self.gallery_page.clone().into(),
         }
+    }
+
+    /// Persisted so restarts keep the choice.
+    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.collapsed = !self.collapsed;
+        crate::app_state::update_config(cx, |config| {
+            config.sidebar_collapsed = self.collapsed;
+        });
+        cx.notify();
     }
 
     pub(crate) fn set_route(&mut self, route: AppRoute, cx: &mut Context<Self>) {

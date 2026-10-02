@@ -6,7 +6,7 @@ use std::{
 
 #[cfg(not(target_family = "wasm"))]
 use arboard::Clipboard;
-use gpui::{App, BorrowAppContext as _, Global};
+use gpui_kit::{App, BorrowAppContext as _, Global};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 #[derive(Debug, thiserror::Error)]
@@ -220,8 +220,8 @@ pub fn save_file(cx: &mut App) -> Option<PathBuf> {
     pick_with_dialog("save_file", None, cx)
 }
 
-/// Shared body of the file-dialog helpers. `rfd::FileDialog` does not exist on
-/// wasm, so the dialog helpers report "unavailable" and return `None` there.
+/// `rfd::FileDialog` does not exist on wasm, so the dialog helpers report
+/// "unavailable" and return `None` there.
 fn pick_with_dialog(action: &'static str, _file: Option<PathBuf>, cx: &mut App) -> Option<PathBuf> {
     #[cfg(target_family = "wasm")]
     {

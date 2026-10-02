@@ -1,11 +1,13 @@
-use gpui::{prelude::*, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Selectable as _,
     button::{Button, ButtonVariants as _},
     label::Label,
     switch::Switch,
     v_flex,
 };
+use gpui_kit::{prelude::*, *};
+
+use crate::accessibility::A11yExt as _;
 
 pub struct HomePage;
 
@@ -26,6 +28,8 @@ impl Render for HomePage {
         let first_run_pending = crate::first_run::is_pending(cx);
         let locale = crate::app::current_locale(cx);
         let notifications_enabled = crate::notifications::snapshot(cx).enabled_by_user;
+        let title = crate::i18n::localize("home_title", None);
+        let subtitle = crate::i18n::localize("home_subtitle", None);
 
         v_flex()
             .min_h_full()
@@ -34,14 +38,19 @@ impl Render for HomePage {
             .gap_6()
             .child(
                 div()
+                    .id("home-title")
+                    .a11y(Role::Heading, title.clone())
+                    .aria_level(1)
                     .text_3xl()
                     .font_weight(FontWeight::BOLD)
-                    .child(crate::i18n::localize("home_title", None)),
+                    .child(title),
             )
             .child(
                 div()
+                    .id("home-subtitle")
+                    .a11y(Role::Paragraph, subtitle.clone())
                     .text_color(cx.theme().muted_foreground)
-                    .child(crate::i18n::localize("home_subtitle", None)),
+                    .child(subtitle),
             )
             .child(
                 Button::new("get-started")
@@ -67,13 +76,19 @@ impl Render for HomePage {
             .when(first_run_pending, |this| {
                 this.child(
                     v_flex()
-                        .w(px(520.))
+                        .id("first-run-setup")
+                        .a11y(Role::Group, "First-run setup")
+                        .w_full()
+                        .max_w(px(520.))
                         .gap_3()
                         .p_4()
                         .rounded_lg()
                         .border_1()
                         .child(
                             div()
+                                .id("first-run-title")
+                                .a11y(Role::Heading, "First-run setup")
+                                .aria_level(2)
                                 .text_lg()
                                 .font_weight(FontWeight::BOLD)
                                 .child("First-run setup"),
@@ -84,17 +99,21 @@ impl Render for HomePage {
                         .child(
                             div()
                                 .flex()
+                                .flex_wrap()
                                 .items_center()
                                 .justify_between()
                                 .child(Label::new("Locale"))
                                 .child(
                                     div()
+                                        .id("first-run-locale")
+                                        .a11y(Role::Group, "Locale")
                                         .flex()
                                         .gap_2()
                                         .child(
                                             Button::new("first-run-locale-en")
                                                 .outline()
                                                 .selected(locale.as_ref() == crate::app::LOCALE_EN)
+                                                .toggled(locale.as_ref() == crate::app::LOCALE_EN)
                                                 .label("English")
                                                 .on_click(|_, _, cx| {
                                                     crate::app::set_locale(
@@ -107,6 +126,9 @@ impl Render for HomePage {
                                             Button::new("first-run-locale-zh-cn")
                                                 .outline()
                                                 .selected(
+                                                    locale.as_ref() == crate::app::LOCALE_ZH_CN,
+                                                )
+                                                .toggled(
                                                     locale.as_ref() == crate::app::LOCALE_ZH_CN,
                                                 )
                                                 .label("简体中文")
@@ -122,11 +144,13 @@ impl Render for HomePage {
                         .child(
                             div()
                                 .flex()
+                                .flex_wrap()
                                 .items_center()
                                 .justify_between()
                                 .child(Label::new("Native notifications"))
                                 .child(
                                     Switch::new("first-run-notifications")
+                                        .accessibility_label("Native notifications")
                                         .checked(notifications_enabled)
                                         .on_click(|checked, _, cx| {
                                             crate::notifications::set_native_notifications_enabled(

@@ -1,15 +1,18 @@
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use gpui::{prelude::*, *};
-use gpui_component::{ActiveTheme as _, VirtualListScrollHandle, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, VirtualListScrollHandle, h_flex, v_flex};
+use gpui_kit::{prelude::*, *};
 
-use crate::ui::widgets::{bounded_list_height, render_virtual_list, variable_item_sizes};
+use crate::accessibility::A11yExt as _;
+use crate::ui::widgets::{
+    bounded_list_height, render_virtual_list, variable_item_sizes, virtual_list_item,
+};
 use gpui_query::client::{ClientDiagnostic, QueryDiagnostic};
 use gpui_query::core::QueryStatus;
 
 use super::dashboard::QueryDevToolsV2Page;
-use super::helpers::{QuerySort, filter_button, format_cache_age, rems_from_px, sort_button};
+use super::helpers::{QuerySort, filter_button, format_cache_age, sort_button};
 
 // `v_virtual_list` positions items purely from `item_sizes`, so rows/details
 // are pinned to these heights — keep in sync with the row renderers.
@@ -23,24 +26,20 @@ const REGISTRY_MAX_LIST_H: f32 = 480.0; // cap before the list itself scrolls
 /// sort/filter; per-row strings precomputed to avoid per-frame `format!()`.
 struct RegistryRow {
     query: QueryDiagnostic,
-    /// Stable stateful element id (`"v2-query-row-{key}"`).
     element_id: SharedString,
-    /// Pre-formatted `cache_hits` Display string.
     cache_hits_str: SharedString,
-    /// Pre-formatted `retry_count` Display string.
     retry_count_str: SharedString,
 }
 
-/// Memoization cache for the filtered+sorted registry rows.
+/// Owned by [`QueryDevToolsV2Page`] so the memo dies with the view instead of
+/// living in an app-wide Global nobody invalidates.
 #[derive(Default)]
-struct RegistryRowCache {
+pub(super) struct RegistryRowCache {
     signature: u64,
     sort: Option<QuerySort>,
     filter: Option<String>,
     rows: Rc<Vec<RegistryRow>>,
 }
-
-impl Global for RegistryRowCache {}
 
 /// Cheap signature of the diagnostic's query slice; equal signatures mean the
 /// cached sort/filter result is still valid.
@@ -58,16 +57,13 @@ fn diagnostic_signature(d: &ClientDiagnostic) -> u64 {
     h.finish()
 }
 
-/// Return the memoized filtered+sorted row list, rebuilding only when the
-/// diagnostic signature, sort, or filter has changed.
 fn cached_registry_rows(
+    cache: &mut RegistryRowCache,
     diagnostic: &Option<ClientDiagnostic>,
     sort_by: QuerySort,
     status_filter: &Option<String>,
-    cx: &mut Context<QueryDevToolsV2Page>,
 ) -> Rc<Vec<RegistryRow>> {
     let signature = diagnostic.as_ref().map(diagnostic_signature).unwrap_or(0);
-    let cache = cx.default_global::<RegistryRowCache>();
     let hit = cache.signature == signature
         && cache.sort == Some(sort_by)
         && cache.filter.as_deref() == status_filter.as_deref();
@@ -75,13 +71,11 @@ fn cached_registry_rows(
         return cache.rows.clone();
     }
 
-    // Miss: recompute the filtered+sorted rows from scratch.
     let mut queries: Vec<QueryDiagnostic> = diagnostic
         .as_ref()
         .map(|d| d.queries.clone())
         .unwrap_or_default();
 
-    // Apply status filter; unknown values are logged and ignored.
     if let Some(filter) = status_filter {
         let filter_status = match filter.as_str() {
             "Idle" => Some(QueryStatus::Idle),
@@ -103,7 +97,6 @@ fn cached_registry_rows(
         }
     }
 
-    // Apply sort.
     match sort_by {
         QuerySort::Key => queries.sort_by(|a, b| a.key.cmp(&b.key)),
         QuerySort::Status => queries.sort_by(|a, b| a.status.cmp(&b.status)),
@@ -144,6 +137,7 @@ pub(super) fn render_query_registry(
     expanded_key: &Option<String>,
     sort_by: QuerySort,
     status_filter: &Option<String>,
+    row_cache: &mut RegistryRowCache,
     scroll_handle: &VirtualListScrollHandle,
     cx: &mut Context<QueryDevToolsV2Page>,
 ) -> Div {
@@ -153,13 +147,17 @@ pub(super) fn render_query_registry(
     let muted = theme.muted;
     let muted_foreground = theme.muted_foreground;
 
-    // Sort controls
-    let sort_controls = h_flex().gap_2().children(vec![
-        sort_button("By Key", QuerySort::Key, sort_by, cx),
-        sort_button("By Status", QuerySort::Status, sort_by, cx),
-        sort_button("By Cache Age", QuerySort::CacheAge, sort_by, cx),
-        sort_button("By Cache Hits", QuerySort::CacheHits, sort_by, cx),
-    ]);
+    let sort_controls = h_flex()
+        .id("v2-sort-group")
+        .a11y(Role::Group, "Sort")
+        .gap_2()
+        .flex_wrap()
+        .children(vec![
+            sort_button("By Key", QuerySort::Key, sort_by, cx),
+            sort_button("By Status", QuerySort::Status, sort_by, cx),
+            sort_button("By Cache Age", QuerySort::CacheAge, sort_by, cx),
+            sort_button("By Cache Hits", QuerySort::CacheHits, sort_by, cx),
+        ]);
 
     // Status filter options matching v2 QueryStatus variants
     let status_options: Vec<Option<&str>> = vec![
@@ -172,19 +170,22 @@ pub(super) fn render_query_registry(
         Some("Cancelled"),
     ];
 
-    let filter_controls = h_flex().gap_2().children(
-        status_options
-            .into_iter()
-            .map(|opt| filter_button(opt, status_filter, cx)),
-    );
+    let filter_controls = h_flex()
+        .id("v2-filter-group")
+        .a11y(Role::Group, "Status filter")
+        .gap_2()
+        .flex_wrap()
+        .children(
+            status_options
+                .into_iter()
+                .map(|opt| filter_button(opt, status_filter, cx)),
+        );
 
-    // Memoized rows: rebuilt only when the diagnostic, sort, or filter changes.
     let queries: Rc<Vec<RegistryRow>> =
-        cached_registry_rows(diagnostic, sort_by, status_filter, cx);
+        cached_registry_rows(row_cache, diagnostic, sort_by, status_filter);
 
-    // Header row
     let header = h_flex().gap_3().px_3().py_2().children(vec![
-        div().w(rems_from_px(16.0)).child(div()),
+        div().w_4().child(div()),
         div()
             .text_xs()
             .font_weight(FontWeight::BOLD)
@@ -234,10 +235,11 @@ pub(super) fn render_query_registry(
     let item_sizes = variable_item_sizes(&item_heights);
     let list_h = bounded_list_height(&item_sizes, px(REGISTRY_LIST_GAP), px(REGISTRY_MAX_LIST_H));
 
-    // Empty state within registry
     let registry_content = if queries.is_empty() {
         div().py_6().flex().justify_center().child(
             div()
+                .id("v2-registry-empty")
+                .a11y(Role::Paragraph, "No queries match the current filter.")
                 .text_sm()
                 .text_color(muted_foreground)
                 .child("No queries match the current filter."),
@@ -246,6 +248,7 @@ pub(super) fn render_query_registry(
         let scroll_handle = scroll_handle.clone();
         let rows = queries.clone();
         let expanded = expanded_key.clone();
+        let total = queries.len();
 
         render_virtual_list(
             cx,
@@ -265,9 +268,14 @@ pub(super) fn render_query_registry(
                             let theme = cx.theme();
                             (theme.radius, theme.secondary)
                         };
-                        let mut item = v_flex()
-                            .gap_1()
-                            .child(query_row(row, is_expanded, cx).h(px(REGISTRY_ROW_H)));
+                        let mut item = virtual_list_item(
+                            SharedString::from(format!("{}-item", row.element_id)),
+                            registry_row_label(row),
+                            ix,
+                            total,
+                        )
+                        .gap_1()
+                        .child(query_row(row, is_expanded, cx).h(px(REGISTRY_ROW_H)));
                         if is_expanded {
                             item = item.child(
                                 query_expanded_detail(row, radius, secondary)
@@ -289,6 +297,9 @@ pub(super) fn render_query_registry(
         .p_4()
         .child(
             div()
+                .id("v2-registry-title")
+                .a11y(Role::Heading, "Query Registry")
+                .aria_level(2)
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .mb_2()
@@ -320,6 +331,10 @@ pub(super) fn render_query_registry(
         .child(registry_content)
 }
 
+#[cfg(test)]
+#[path = "registry.test.rs"]
+mod registry_test;
+
 fn query_row(
     row: &RegistryRow,
     is_expanded: bool,
@@ -342,14 +357,7 @@ fn query_row(
         QueryStatus::Failure => danger,
     };
 
-    let status_label = match q.status {
-        QueryStatus::Idle => "Idle",
-        QueryStatus::LoadingEmpty => "Loading",
-        QueryStatus::LoadingWithData => "Loading",
-        QueryStatus::Success => "Success",
-        QueryStatus::Failure => "Failure",
-        QueryStatus::Cancelled => "Cancelled",
-    };
+    let status_label = status_label(&q.status);
 
     let chevron = if is_expanded { "\u{25BE}" } else { "\u{25B8}" };
 
@@ -361,6 +369,8 @@ fn query_row(
 
     div()
         .id(element_id)
+        .a11y(Role::Button, q.key.clone())
+        .aria_expanded(is_expanded)
         .cursor_pointer()
         .rounded(radius)
         .px_3()
@@ -379,7 +389,7 @@ fn query_row(
             // flex_1 data columns align.
             h_flex().gap_3().items_center().children(vec![
                 div()
-                    .w(rems_from_px(16.0))
+                    .w_4()
                     .text_xs()
                     .text_color(muted_foreground)
                     .child(chevron.to_string()),
@@ -414,6 +424,31 @@ fn query_row(
                     .child(retry_count_str),
             ]),
         )
+}
+
+fn status_label(status: &QueryStatus) -> &'static str {
+    match status {
+        QueryStatus::Idle => "Idle",
+        QueryStatus::LoadingEmpty | QueryStatus::LoadingWithData => "Loading",
+        QueryStatus::Success => "Success",
+        QueryStatus::Failure => "Failure",
+        QueryStatus::Cancelled => "Cancelled",
+    }
+}
+
+/// The text an assistive reader announces for one registry row; row children
+/// are plain text divs that produce no a11y nodes on their own.
+fn registry_row_label(row: &RegistryRow) -> String {
+    let q = &row.query;
+    format!(
+        "{}: status {}, policy {}, cache age {}, {} hits, {} retries",
+        q.key,
+        status_label(&q.status),
+        q.cache_policy,
+        format_cache_age(q.cache_age_ms),
+        row.cache_hits_str,
+        row.retry_count_str,
+    )
 }
 
 fn query_expanded_detail(row: &RegistryRow, radius: Pixels, secondary: Hsla) -> Div {

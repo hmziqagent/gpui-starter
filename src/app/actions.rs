@@ -1,20 +1,13 @@
 use es_fluent::EsFluent;
 use es_fluent_lang::es_fluent_language;
-use gpui::{Action, SharedString, actions};
-use gpui_component::ThemeMode;
+use gpui_kit::actions;
+use gpui_kit::component::ThemeMode;
+use gpui_kit::{Action, SharedString};
 use strum::EnumIter;
-
-// ---------------------------------------------------------------------------
-// Languages (es-fluent)
-// ---------------------------------------------------------------------------
 
 #[es_fluent_language]
 #[derive(Clone, Copy, Debug, EnumIter, EsFluent, PartialEq)]
 pub enum Languages {}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
 
 actions!(
     app,
@@ -43,10 +36,6 @@ pub struct SelectRadius(pub usize);
 #[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
 #[action(namespace = app, no_json)]
 pub struct ExecuteCommand(pub crate::commands::CommandId);
-
-// ---------------------------------------------------------------------------
-// Re-exported action types used by menus and title_bar
-// ---------------------------------------------------------------------------
 
 #[derive(Action, Clone, PartialEq, Eq, serde::Deserialize)]
 #[action(namespace = app, no_json)]

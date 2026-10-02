@@ -1,9 +1,8 @@
-use gpui::prelude::*;
-use gpui::*;
+use gpui_kit::component::{ActiveTheme as _, button::Button, h_flex};
+use gpui_kit::{prelude::*, *};
 
-use gpui_component::{ActiveTheme as _, button::Button, h_flex};
-
-use crate::ui::widgets::{render_virtual_list, uniform_item_sizes};
+use crate::accessibility::A11yExt as _;
+use crate::ui::widgets::{render_virtual_list, uniform_item_sizes, virtual_list_item};
 
 use super::super::QueryPlaygroundPage;
 use super::super::ui_helpers::section_card;
@@ -27,6 +26,8 @@ impl QueryPlaygroundPage {
                 .py_1()
                 .child(
                     div()
+                        .id("activity-log-count")
+                        .a11y(Role::Paragraph, format!("{} entries", log_count))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(format!("{} entries", log_count)),
@@ -54,7 +55,6 @@ impl QueryPlaygroundPage {
                 ),
             )
         } else {
-            // Virtualized list: only renders visible entries (20px each).
             let item_count = self.activity_log.len();
             let item_height = px(20.);
             let item_sizes = uniform_item_sizes(item_count, item_height);
@@ -86,7 +86,7 @@ impl QueryPlaygroundPage {
                                         .get(entry_ix)
                                         .cloned()
                                         .unwrap_or_default();
-                                    div()
+                                    virtual_list_item(ix, entry.clone(), ix, total)
                                         .h(px(20.))
                                         .text_xs()
                                         .font_family("monospace")

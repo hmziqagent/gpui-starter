@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(not(target_family = "wasm"))]
 use atomic_write_file::AtomicWriteFile;
-use gpui::{App, BorrowAppContext, Global};
+use gpui_kit::{App, BorrowAppContext, Global, Task};
 // Renamed upstream at gpui-component 5a5e2ab; variant names (and so the
 // persisted serde representation) are unchanged.
-use gpui_component::scroll::ScrollbarMode;
+use gpui_kit::component::scroll::ScrollbarMode;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -42,21 +42,27 @@ const MAX_PLAUSIBLE_DIM: f32 = 100_000.0;
 /// pending timer instead of spawning another one.
 static SAVE_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
+/// App-wide config store (GPUI global). Read through the helper fns in
+/// this module; write only via [`update_config`] and [`force_save`],
+/// which own the debounced persistence.
 pub struct AppState {
-    pub paths: AppPaths,
-    pub config: AppConfig,
-    pub last_load_error: Option<String>,
-    pub last_save_error: Option<String>,
+    paths: AppPaths,
+    config: AppConfig,
+    last_load_error: Option<String>,
+    last_save_error: Option<String>,
     dirty: bool,
     // Serialized bytes of the last successful flush; lets identical states skip the write.
     last_flushed_bytes: Vec<u8>,
     // Bound debounce task; dropped on shutdown so it cannot commit stale bytes
     // beneath the synchronous flush (dropping a `Task` cancels it).
-    in_flight_save: Option<gpui::Task<()>>,
+    in_flight_save: Option<Task<()>>,
 }
 
 impl Global for AppState {}
 
+/// Persisted application configuration. The pub fields are the on-disk serde
+/// schema pinned by tests/snapshot_tests.rs: add new fields with a
+/// `#[serde(default)]`, never rename or repurpose an existing one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
     pub version: u32,
@@ -79,7 +85,6 @@ pub struct AppConfig {
     pub update_channel: String,
     #[serde(default)]
     pub last_update_check: Option<String>,
-    /// Dev-only frame-time readout in the status bar; on by default in debug builds.
     #[serde(default = "default_show_frame_time")]
     pub show_frame_time: bool,
 }
@@ -157,7 +162,6 @@ fn default_stable() -> String {
     "stable".to_string()
 }
 
-/// Debug builds ship with the frame-time readout enabled.
 fn default_show_frame_time() -> bool {
     cfg!(debug_assertions)
 }
@@ -231,6 +235,20 @@ pub fn with_config<R>(cx: &App, f: impl FnOnce(&AppConfig) -> R) -> R {
 /// Convenience getter cloning just the update channel instead of the config.
 pub fn update_channel(cx: &App) -> String {
     with_config(cx, |c| c.update_channel.clone())
+}
+
+/// Error from the last state-file load, if any; `None` before
+/// [`initialize`] and after a clean load.
+pub fn load_error(cx: &App) -> Option<String> {
+    cx.try_global::<AppState>()
+        .and_then(|s| s.last_load_error.clone())
+}
+
+/// Error from the most recent save, if any; cleared by the next
+/// successful flush.
+pub fn save_error(cx: &App) -> Option<String> {
+    cx.try_global::<AppState>()
+        .and_then(|s| s.last_save_error.clone())
 }
 
 pub fn paths(cx: &App) -> AppPaths {
@@ -310,10 +328,9 @@ fn arm_debounce(cx: &mut App) {
         bg.timer(std::time::Duration::from_millis(DEBOUNCE_MS))
             .await;
 
-        // Allow the next update_config to schedule a fresh timer.
         SAVE_SCHEDULED.store(false, Ordering::Relaxed);
 
-        // Step 1 (UI thread): serialize + dirty-check. No I/O here.
+        // No I/O here.
         let request = cx.update(|cx| {
             cx.update_global::<AppState, _>(|state, _cx| {
                 if !state.dirty {
@@ -327,14 +344,11 @@ fn arm_debounce(cx: &mut App) {
             return;
         };
 
-        // Step 2 (background thread): atomic write + fsync.
         let write_bytes = bytes.clone();
         let result = bg
             .spawn(async move { save_config(&path, &write_bytes) })
             .await;
 
-        // Step 3 (UI thread): a stale write signals re-arm so the current
-        // bytes are re-flushed on the next debounce.
         cx.update(|cx| {
             let needs_rearm =
                 cx.update_global::<AppState, _>(|state, _cx| commit_flush(state, bytes, result));
@@ -454,7 +468,7 @@ fn load_config(path: &Path) -> (AppConfig, Option<String>) {
 
     match serde_json::from_str::<AppConfig>(&json) {
         Ok(config) => {
-            let config = crate::config_migrations::migrate(config).normalized();
+            let config = crate::state::migrations::migrate(config).normalized();
             // Log-only tier: lints surface unusable-but-loadable values.
             crate::state::config_validation::validate_config(&config);
             (config, None)
@@ -515,6 +529,8 @@ fn save_config(path: &Path, json_bytes: &[u8]) -> Result<(), AppError> {
     #[cfg(not(target_family = "wasm"))]
     {
         ensure_parent_dir(path)?;
+        // `mut` is only consumed by the unix mode/preserve_mode calls below.
+        #[cfg_attr(not(target_family = "unix"), allow(unused_mut))]
         let mut options = AtomicWriteFile::options();
         // The rename commit replaces a planted symlink instead of writing
         // through it; every commit lands 0600 (preserve_mode off).
