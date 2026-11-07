@@ -26,8 +26,6 @@ pub struct LifecycleState {
     pub startup_step: Option<String>,
     pub shutdown_step: Option<String>,
     pub last_startup_error: Option<String>,
-    pub last_shutdown_error: Option<String>,
-    pub last_error: Option<String>,
 }
 
 impl Global for LifecycleState {}
@@ -46,8 +44,6 @@ impl LifecycleState {
             startup_step: None,
             shutdown_step: None,
             last_startup_error: None,
-            last_shutdown_error: None,
-            last_error: None,
         }
     }
 }
@@ -71,18 +67,8 @@ pub fn set_shutdown_step(step: impl Into<String>, cx: &mut App) {
 }
 
 pub fn set_startup_error(error: impl Into<String>, cx: &mut App) {
-    let error = error.into();
     let state = cx.default_global::<LifecycleState>();
-    state.last_startup_error = Some(error.clone());
-    state.last_error = Some(error);
-    state.updated_at = AppTimestamp::now();
-}
-
-pub fn set_shutdown_error(error: impl Into<String>, cx: &mut App) {
-    let error = error.into();
-    let state = cx.default_global::<LifecycleState>();
-    state.last_shutdown_error = Some(error.clone());
-    state.last_error = Some(error);
+    state.last_startup_error = Some(error.into());
     state.updated_at = AppTimestamp::now();
 }
 
@@ -147,63 +133,68 @@ pub fn take_render_panic() -> bool {
     RENDER_PANIC_OCCURRED.swap(false, Ordering::SeqCst)
 }
 
+/// Set while the panic handler runs its stdlib-only report path; a nested
+/// panic bails instead of escalating into a panic-in-panic abort (RCA §5.3).
+static HANDLING_PANIC: AtomicBool = AtomicBool::new(false);
+
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let summary = info.to_string();
-        let slot = LAST_PANIC_SUMMARY.get_or_init(|| Mutex::new(None));
-        if let Ok(mut value) = slot.lock() {
-            *value = Some(summary.clone());
-        }
-
-        let is_render = in_render_path();
-
-        // Only render-originating panics swap in the error boundary; other
-        // panics (background tasks, init) must not.
-        if is_render {
-            RENDER_PANIC_OCCURRED.store(true, Ordering::SeqCst);
-        }
-
-        if let Some(data_dir) = APP_DATA_DIR.get() {
-            let backtrace = std::backtrace::Backtrace::capture();
-            let bt_string = match backtrace.status() {
-                std::backtrace::BacktraceStatus::Captured => backtrace.to_string(),
-                _ => String::new(),
-            };
-
-            let recent_errors = RECENT_ERRORS
-                .get()
-                .and_then(|slot| slot.lock().ok())
-                .map(|guard| guard.clone())
-                .unwrap_or_default();
-
-            let report = crate::services::crash_report::CrashReport::new(
-                summary.clone(),
-                bt_string,
-                is_render,
-                recent_errors,
-            );
-
-            if let Err(err) = crate::services::crash_report::write_crash_report(&report, data_dir) {
-                // We are inside the panic handler -- best-effort logging only.
-                eprintln!("[gpui_starter::lifecycle] failed to write crash report: {err}");
-            }
-        }
-
-        tracing::error!(
-            target: "gpui_starter::lifecycle",
-            panic = %summary,
-            "application panic captured"
-        );
+        handle_panic(&info.to_string(), in_render_path());
         previous(info);
     }));
 }
 
-// File-based crash detection is native-only: path APIs panic at runtime on
-// wasm and a browser tab has no next-launch semantics anyway.
+/// Stdlib-only by construction (std::fs/std::time/static Mutexes): GPUI,
+/// tracing, and serialization crates can all be mid-borrow mid-panic.
+fn handle_panic(summary: &str, is_render: bool) {
+    if HANDLING_PANIC.swap(true, Ordering::SeqCst) {
+        return; // panic while reporting: write nothing, keep the bail cheap
+    }
 
-// Marker lives under the app data dir, never $TMPDIR (symlink planting); an
-// unset dir disables the feature.
+    let slot = LAST_PANIC_SUMMARY.get_or_init(|| Mutex::new(None));
+    if let Ok(mut value) = slot.lock() {
+        *value = Some(summary.to_string());
+    }
+
+    // Only render-originating panics swap in the error boundary; other
+    // panics (background tasks, init) must not.
+    if is_render {
+        RENDER_PANIC_OCCURRED.store(true, Ordering::SeqCst);
+    }
+
+    if let Some(data_dir) = APP_DATA_DIR.get() {
+        let backtrace = std::backtrace::Backtrace::capture();
+        let bt_string = match backtrace.status() {
+            std::backtrace::BacktraceStatus::Captured => backtrace.to_string(),
+            _ => String::new(),
+        };
+
+        let recent_errors = RECENT_ERRORS
+            .get()
+            .and_then(|slot| slot.lock().ok())
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+
+        let report = crate::services::crash_report::CrashReport::new(
+            summary.to_string(),
+            bt_string,
+            is_render,
+            recent_errors,
+        );
+
+        if let Err(err) = crate::services::crash_report::write_crash_report(&report, data_dir) {
+            eprintln!("[gpui_starter::lifecycle] failed to write crash report: {err}");
+        }
+    }
+
+    // stderr, not tracing: the subscriber may be the borrowed state.
+    eprintln!("[gpui_starter::lifecycle] panic captured: {summary}");
+    HANDLING_PANIC.store(false, Ordering::SeqCst);
+}
+
+// Native-only: path APIs panic on wasm. The marker lives under the app data
+// dir, never $TMPDIR (symlink planting); an unset dir disables the feature.
 #[cfg(not(target_family = "wasm"))]
 fn crash_marker_path() -> Option<PathBuf> {
     APP_DATA_DIR.get().map(|dir| dir.join("crash-marker"))

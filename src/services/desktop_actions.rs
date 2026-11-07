@@ -1,12 +1,12 @@
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 #[cfg(not(target_family = "wasm"))]
 use arboard::Clipboard;
-use gpui_kit::{App, BorrowAppContext as _, Global};
+use gpui_kit::{App, AsyncApp, BorrowAppContext as _, Global, PathPromptOptions};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 #[derive(Debug, thiserror::Error)]
@@ -26,8 +26,6 @@ pub enum DesktopActionError {
         #[source]
         source: std::io::Error,
     },
-    #[error("file dialog failed: {0}")]
-    DialogFailed(String),
     #[error("watcher error: {0}")]
     Watcher(#[from] notify::Error),
     #[error("desktop actions unavailable")]
@@ -65,16 +63,30 @@ pub struct DesktopActionsState {
 
 struct DesktopActionsInner {
     next_watcher_id: u64,
-    watchers: BTreeMap<u64, RecommendedWatcher>,
+    // Keyed by canonical path so repeated clicks reuse one OS watcher.
+    watchers: BTreeMap<PathBuf, WatcherEntry>,
+    // Linux X11/Wayland host the clipboard inside the owning instance; one
+    // retained Clipboard keeps copied text pasteable for the app's lifetime.
+    #[cfg(not(target_family = "wasm"))]
+    clipboard: Option<Clipboard>,
+}
+
+struct WatcherEntry {
+    id: u64,
+    // Held alive to keep notify watching; nothing reads it.
+    #[allow(dead_code)]
+    watcher: RecommendedWatcher,
 }
 
 impl Global for DesktopActionsState {}
 
 pub fn initialize(cx: &mut App) {
     // Wasm swaps in `navigator.clipboard` (see platform::web::clipboard) and
-    // compiles out rfd/`open`; the notify watchers simply never fire there.
+    // compiles out `open`; path prompts report unavailable, watchers never fire.
     #[cfg(not(target_family = "wasm"))]
-    let clipboard_ok = Clipboard::new().is_ok();
+    let clipboard = Clipboard::new();
+    #[cfg(not(target_family = "wasm"))]
+    let clipboard_ok = clipboard.is_ok();
     #[cfg(target_family = "wasm")]
     let clipboard_ok = crate::platform::web::clipboard::is_available();
     let mut snapshot = DesktopActionsSnapshot {
@@ -90,12 +102,14 @@ pub fn initialize(cx: &mut App) {
         Some(err) => crate::capabilities::CapabilityStatus::degraded(err),
         None => crate::capabilities::CapabilityStatus::supported_enabled(),
     };
-    crate::capabilities::set("desktop_actions", status, cx);
+    crate::capabilities::set(crate::capabilities::Capability::DESKTOP_ACTIONS, status, cx);
     cx.set_global(DesktopActionsState {
         snapshot,
         inner: Arc::new(Mutex::new(DesktopActionsInner {
             next_watcher_id: 1,
             watchers: BTreeMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            clipboard: clipboard.ok(),
         })),
     });
 }
@@ -117,9 +131,7 @@ pub fn copy_text(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        let result = Clipboard::new()
-            .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
-            .map_err(DesktopActionError::from);
+        let result = copy_via_retained_clipboard(text, cx);
         update_result(
             "clipboard_copy",
             result.as_ref().err().map(|e| e.to_string()),
@@ -127,6 +139,24 @@ pub fn copy_text(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
         );
         result
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn copy_via_retained_clipboard(text: &str, cx: &mut App) -> Result<(), DesktopActionError> {
+    let state = cx
+        .try_global::<DesktopActionsState>()
+        .ok_or(DesktopActionError::Unavailable)?;
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| DesktopActionError::LockPoisoned)?;
+    let clipboard = inner
+        .clipboard
+        .as_mut()
+        .ok_or(DesktopActionError::Unavailable)?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(DesktopActionError::from)
 }
 
 pub fn copy_diagnostics(cx: &mut App) -> Result<(), DesktopActionError> {
@@ -190,62 +220,175 @@ pub fn open_url(url: &str, cx: &mut App) -> Result<(), DesktopActionError> {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-pub fn pick_file(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("pick_file", rfd::FileDialog::new().pick_file(), cx)
+/// Opens the platform open-file dialog. Returns the picked path, or `None` on
+/// cancel/wasm. The prompt resolves on GPUI's run loop, so callers may update
+/// entities from the awaiting task (RCA §5.2.1: dialog callbacks must never
+/// re-enter the app outside a task turn).
+pub async fn pick_file(cx: &mut AsyncApp) -> Option<PathBuf> {
+    prompt_paths("pick_file", pick_file_options(), cx).await
 }
 
-#[cfg(target_family = "wasm")]
-pub fn pick_file(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("pick_file", None, cx)
+/// Opens the platform directory-pick dialog; same contract as [`pick_file`].
+pub async fn pick_folder(cx: &mut AsyncApp) -> Option<PathBuf> {
+    prompt_paths("pick_folder", pick_folder_options(), cx).await
 }
 
-#[cfg(not(target_family = "wasm"))]
-pub fn pick_folder(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("pick_folder", rfd::FileDialog::new().pick_folder(), cx)
-}
-
-#[cfg(target_family = "wasm")]
-pub fn pick_folder(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("pick_folder", None, cx)
-}
-
-#[cfg(not(target_family = "wasm"))]
-pub fn save_file(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("save_file", rfd::FileDialog::new().save_file(), cx)
-}
-
-#[cfg(target_family = "wasm")]
-pub fn save_file(cx: &mut App) -> Option<PathBuf> {
-    pick_with_dialog("save_file", None, cx)
-}
-
-/// `rfd::FileDialog` does not exist on wasm, so the dialog helpers report
-/// "unavailable" and return `None` there.
-fn pick_with_dialog(action: &'static str, _file: Option<PathBuf>, cx: &mut App) -> Option<PathBuf> {
+/// Opens the platform save dialog starting at the user's home directory.
+/// Returns the target path, or `None` on cancel/wasm.
+pub async fn save_file(cx: &mut AsyncApp) -> Option<PathBuf> {
     #[cfg(target_family = "wasm")]
     {
-        tracing::debug!(
-            target: "gpui_starter::desktop_actions",
-            action,
-            "file dialog unavailable on wasm"
-        );
-        update_result(
-            action,
-            Some("file dialog unavailable on wasm".to_string()),
-            cx,
-        );
+        report_dialog_unavailable("save_file", cx);
         return None;
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        tracing::info!(target: "gpui_starter::desktop_actions", file = ?_file, "file picker result");
-        update_result(action, None, cx);
-        _file
+        let directory = directories::BaseDirs::new()
+            .map(|dirs| dirs.home_dir().to_path_buf())
+            .unwrap_or_default();
+        let outcome = match cx
+            .update(|app| app.prompt_for_new_path(&directory, None))
+            .await
+        {
+            Ok(result) => path_outcome(result),
+            Err(_) => PickOutcome::Failed("file dialog closed without a response".to_string()),
+        };
+        commit_pick_outcome("save_file", outcome, cx)
+    }
+}
+
+fn pick_file_options() -> PathPromptOptions {
+    PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: None,
+    }
+}
+
+fn pick_folder_options() -> PathPromptOptions {
+    PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: None,
+    }
+}
+
+// The prompt result mappers run only where a platform prompt exists; wasm
+// arms return before reaching them.
+#[cfg(not(target_family = "wasm"))]
+enum PickOutcome {
+    Picked(PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn paths_outcome(result: anyhow::Result<Option<Vec<PathBuf>>>) -> PickOutcome {
+    match result {
+        Ok(Some(paths)) => paths
+            .into_iter()
+            .next()
+            .map(PickOutcome::Picked)
+            .unwrap_or(PickOutcome::Cancelled),
+        Ok(None) => PickOutcome::Cancelled,
+        Err(err) => PickOutcome::Failed(err.to_string()),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn path_outcome(result: anyhow::Result<Option<PathBuf>>) -> PickOutcome {
+    match result {
+        Ok(Some(path)) => PickOutcome::Picked(path),
+        Ok(None) => PickOutcome::Cancelled,
+        Err(err) => PickOutcome::Failed(err.to_string()),
+    }
+}
+
+async fn prompt_paths(
+    action: &'static str,
+    _options: PathPromptOptions,
+    cx: &mut AsyncApp,
+) -> Option<PathBuf> {
+    #[cfg(target_family = "wasm")]
+    {
+        report_dialog_unavailable(action, cx);
+        return None;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let outcome = match cx.update(|app| app.prompt_for_paths(_options)).await {
+            Ok(result) => paths_outcome(result),
+            Err(_) => PickOutcome::Failed("file dialog closed without a response".to_string()),
+        };
+        commit_pick_outcome(action, outcome, cx)
+    }
+}
+
+// Only the wasm pick arms call this; every native path has a real prompt.
+#[cfg(target_family = "wasm")]
+fn report_dialog_unavailable(action: &'static str, cx: &mut AsyncApp) {
+    tracing::debug!(
+        target: "gpui_starter::desktop_actions",
+        action,
+        "file dialog unavailable on wasm"
+    );
+    cx.update(|app| {
+        update_result(
+            action,
+            Some("file dialog unavailable on wasm".to_string()),
+            app,
+        )
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn commit_pick_outcome(
+    action: &'static str,
+    outcome: PickOutcome,
+    cx: &mut AsyncApp,
+) -> Option<PathBuf> {
+    match outcome {
+        PickOutcome::Picked(path) => {
+            tracing::info!(
+                target: "gpui_starter::desktop_actions",
+                file = %path.display(),
+                "file picker result"
+            );
+            cx.update(|app| update_result(action, None, app));
+            Some(path)
+        }
+        PickOutcome::Cancelled => {
+            tracing::info!(
+                target: "gpui_starter::desktop_actions",
+                "file picker cancelled"
+            );
+            cx.update(|app| update_result(action, None, app));
+            None
+        }
+        PickOutcome::Failed(error) => {
+            cx.update(|app| update_result(action, Some(error), app));
+            None
+        }
     }
 }
 
 fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
+    let result = register_watcher(&path, cx);
+    match &result {
+        Ok(watcher_id) => tracing::info!(
+            target: "gpui_starter::desktop_actions",
+            watcher_id,
+            path = %path.display(),
+            "watcher registered"
+        ),
+        Err(err) => update_result("watch_path", Some(err.to_string()), cx),
+    }
+    result
+}
+
+fn register_watcher(path: &Path, cx: &mut App) -> Result<u64, DesktopActionError> {
     let state = cx
         .try_global::<DesktopActionsState>()
         .ok_or(DesktopActionError::Unavailable)?;
@@ -253,6 +396,11 @@ fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
         .inner
         .lock()
         .map_err(|_| DesktopActionError::LockPoisoned)?;
+    // Canonicalize fails for a missing directory; `watch` reports that below.
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(entry) = inner.watchers.get(&key) {
+        return Ok(entry.id);
+    }
     let watcher_id = inner.next_watcher_id;
     inner.next_watcher_id += 1;
 
@@ -274,16 +422,21 @@ fn watch_path(path: PathBuf, cx: &mut App) -> Result<u64, DesktopActionError> {
         })
         .map_err(DesktopActionError::from)?;
     watcher
-        .watch(&path, RecursiveMode::NonRecursive)
+        .watch(path, RecursiveMode::NonRecursive)
         .map_err(DesktopActionError::from)?;
-    inner.watchers.insert(watcher_id, watcher);
+    inner.watchers.insert(
+        key,
+        WatcherEntry {
+            id: watcher_id,
+            watcher,
+        },
+    );
     let active_watchers = inner.watchers.len();
     drop(inner);
     cx.update_global::<DesktopActionsState, _>(|state, _cx| {
         state.snapshot.active_watchers = active_watchers;
         state.snapshot.last_error = None;
     });
-    tracing::info!(target: "gpui_starter::desktop_actions", watcher_id, path = %path.display(), "watcher registered");
     Ok(watcher_id)
 }
 
@@ -309,37 +462,21 @@ pub fn watch_config_dir(cx: &mut App) -> Result<u64, DesktopActionError> {
     watch_path(path, cx)
 }
 
-fn unwatch_path(id: u64, cx: &mut App) -> bool {
-    let Some(state) = cx.try_global::<DesktopActionsState>() else {
-        return false;
+pub fn unwatch_all(cx: &mut App) -> usize {
+    let Some(state) = cx.try_global::<DesktopActionsState>().cloned() else {
+        return 0;
     };
-    let (removed, active_watchers) = if let Ok(mut inner) = state.inner.lock() {
-        let removed = inner.watchers.remove(&id).is_some();
-        (removed, inner.watchers.len())
-    } else {
-        return false;
+    let count = match state.inner.lock() {
+        Ok(mut inner) => {
+            let count = inner.watchers.len();
+            inner.watchers.clear();
+            count
+        }
+        Err(_) => 0,
     };
     cx.update_global::<DesktopActionsState, _>(|state, _cx| {
-        state.snapshot.active_watchers = active_watchers;
+        state.snapshot.active_watchers = 0;
     });
-    removed
-}
-
-pub fn unwatch_all(cx: &mut App) -> usize {
-    let state = match cx.try_global::<DesktopActionsState>().cloned() {
-        Some(state) => state,
-        None => return 0,
-    };
-    let watcher_ids = state
-        .inner
-        .lock()
-        .ok()
-        .map(|inner| inner.watchers.keys().copied().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let count = watcher_ids.len();
-    for watcher_id in watcher_ids {
-        let _ = unwatch_path(watcher_id, cx);
-    }
     count
 }
 
@@ -412,7 +549,10 @@ fn update_result(action: &str, error: Option<String>, cx: &mut App) {
             "desktop action failed"
         );
         crate::error_surface::report(
-            format!("Desktop action `{action}` failed: {error}"),
+            crate::i18n::localize_with_args(
+                "desktop_action_failed",
+                &[("action", action), ("error", error.as_str())],
+            ),
             crate::errors::AppErrorSeverity::Warning,
             crate::error_surface::ErrorCategory::System,
             vec![
@@ -427,5 +567,100 @@ fn update_result(action: &str, error: Option<String>, cx: &mut App) {
             action,
             "desktop action succeeded"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+
+    #[test]
+    fn pick_file_options_requests_a_single_file() {
+        let options = pick_file_options();
+        assert!(options.files);
+        assert!(!options.directories);
+        assert!(!options.multiple);
+        assert!(options.prompt.is_none());
+    }
+
+    #[test]
+    fn pick_folder_options_requests_a_single_directory() {
+        let options = pick_folder_options();
+        assert!(!options.files);
+        assert!(options.directories);
+        assert!(!options.multiple);
+        assert!(options.prompt.is_none());
+    }
+
+    #[test]
+    fn paths_outcome_maps_first_pick_cancel_and_error() {
+        assert!(matches!(
+            paths_outcome(Ok(Some(vec![PathBuf::from("/tmp/a.wav")]))),
+            PickOutcome::Picked(ref path) if path == &PathBuf::from("/tmp/a.wav")
+        ));
+        assert!(matches!(
+            paths_outcome(Ok(Some(Vec::new()))),
+            PickOutcome::Cancelled
+        ));
+        assert!(matches!(paths_outcome(Ok(None)), PickOutcome::Cancelled));
+        assert!(matches!(
+            paths_outcome(Err(anyhow::anyhow!("portal missing"))),
+            PickOutcome::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn path_outcome_maps_pick_cancel_and_error() {
+        assert!(matches!(
+            path_outcome(Ok(Some(PathBuf::from("/tmp/out.png")))),
+            PickOutcome::Picked(_)
+        ));
+        assert!(matches!(path_outcome(Ok(None)), PickOutcome::Cancelled));
+        assert!(matches!(
+            path_outcome(Err(anyhow::anyhow!("no panel"))),
+            PickOutcome::Failed(_)
+        ));
+    }
+
+    #[gpui_kit::test]
+    async fn watching_the_same_path_twice_keeps_one_watcher(cx: &mut TestAppContext) {
+        let first_dir = tempfile::tempdir().expect("temp dir");
+        let second_dir = tempfile::tempdir().expect("temp dir");
+        cx.update(|app| {
+            crate::error_surface::initialize(app);
+            initialize(app);
+            let first = watch_path(first_dir.path().to_path_buf(), app).expect("first watch");
+            let repeat = watch_path(first_dir.path().to_path_buf(), app).expect("repeat watch");
+            assert_eq!(first, repeat, "a repeated path must reuse its watcher");
+            let second = watch_path(second_dir.path().to_path_buf(), app).expect("second watch");
+            assert_ne!(first, second, "distinct paths need distinct watcher ids");
+            assert_eq!(snapshot(app).active_watchers, 2);
+            assert_eq!(unwatch_all(app), 2);
+            assert_eq!(snapshot(app).active_watchers, 0);
+        });
+    }
+
+    #[gpui_kit::test]
+    async fn watching_a_missing_directory_reports_the_failure(cx: &mut TestAppContext) {
+        cx.update(|app| {
+            crate::error_surface::initialize(app);
+            initialize(app);
+            let missing = std::env::temp_dir().join("gpui-starter-desktop-actions-missing");
+            let result = watch_path(missing, app);
+            assert!(result.is_err(), "watching a missing directory must fail");
+            let snap = snapshot(app);
+            assert_eq!(snap.active_watchers, 0);
+            let error = snap.last_error.expect("failure must land in last_error");
+            assert!(error.contains("watcher"), "unexpected error: {error}");
+            let surface = app
+                .try_global::<crate::error_surface::ErrorSurfaceState>()
+                .expect("error surface state");
+            assert_eq!(
+                surface.records.len(),
+                1,
+                "failure must reach the error surface"
+            );
+        });
     }
 }

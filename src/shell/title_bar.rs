@@ -5,35 +5,35 @@ use gpui_kit::component::{
     menu::{AppMenuBar, DropdownMenu as _},
 };
 use gpui_kit::{
-    Anchor, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Render, Role, SharedString, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    Anchor, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Render, Role, SharedString, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px,
 };
 
 use crate::accessibility::A11yExt;
 use crate::app::{SelectFont, SelectRadius};
 use crate::menus;
+use crate::shell::account_menu::AccountMenu;
 
 pub struct AppTitleBar {
     title: SharedString,
     app_menu_bar: Entity<AppMenuBar>,
     settings: Entity<SettingsDropdown>,
+    account: Entity<AccountMenu>,
 }
 
 impl AppTitleBar {
-    pub fn new(
-        title: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(title: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         let title: SharedString = title.into();
         let app_menu_bar = menus::init(title.clone(), cx);
-        let settings = cx.new(|cx| SettingsDropdown::new(window, cx));
+        let settings = cx.new(SettingsDropdown::new);
+        let account = cx.new(AccountMenu::new);
 
         Self {
             title,
             app_menu_bar,
             settings,
+            account,
         }
     }
 }
@@ -71,7 +71,7 @@ impl Render for AppTitleBar {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .when(show_theme_label, |this| {
                                 this.child(
-                                    Label::new("theme:")
+                                    Label::new(crate::i18n::localize("titlebar_theme_label"))
                                         .secondary(cx.theme().theme_name())
                                         .text_sm(),
                                 )
@@ -83,9 +83,9 @@ impl Render for AppTitleBar {
                                     .ghost()
                                     .compact()
                                     .icon(IconName::Search)
-                                    .accessibility_label(search_a11y_label())
+                                    .accessibility_label(search_a11y_label(cx))
                                     .on_click(|_, _, cx| {
-                                        crate::launcher::open_launcher(cx);
+                                        crate::features::command_palette::open_launcher(cx);
                                     }),
                             )
                             .child(
@@ -94,18 +94,21 @@ impl Render for AppTitleBar {
                                     .ghost()
                                     .compact()
                                     .icon(IconName::Bell)
-                                    .accessibility_label("Notifications")
+                                    .accessibility_label(crate::i18n::localize(
+                                        "titlebar_notifications",
+                                    ))
                                     .on_click(|_, _, cx| {
                                         crate::events::emit(
                                             crate::events::AppEventKind::Navigate(
                                                 crate::routes::AppRoute::page(
-                                                    crate::sidebar::Page::Notifications,
+                                                    crate::page::Page::Notifications,
                                                 ),
                                             ),
                                             cx,
                                         );
                                     }),
-                            ),
+                            )
+                            .child(self.account.clone()),
                     ),
             )
     }
@@ -116,7 +119,7 @@ struct SettingsDropdown {
 }
 
 impl SettingsDropdown {
-    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
         }
@@ -158,7 +161,7 @@ impl Render for SettingsDropdown {
 
         div()
             .id("settings-dropdown")
-            .a11y(Role::Group, "Appearance")
+            .a11y(Role::Group, crate::i18n::localize("titlebar_appearance"))
             .track_focus(&focus_handle)
             .on_action(cx.listener(Self::on_select_font))
             .on_action(cx.listener(Self::on_select_radius))
@@ -167,22 +170,30 @@ impl Render for SettingsDropdown {
                     .small()
                     .ghost()
                     .icon(IconName::Settings2)
-                    .accessibility_label("Appearance")
+                    .accessibility_label(crate::i18n::localize("titlebar_appearance"))
                     .dropdown_menu(move |menu, _window, _cx| {
                         menu.scrollable(true)
-                            .label("Font Size")
-                            .menu_with_check("Large", font_size == 18, Box::new(SelectFont(18)))
+                            .label(crate::i18n::localize("titlebar_font_size"))
                             .menu_with_check(
-                                "Medium (default)",
+                                crate::i18n::localize("titlebar_font_large"),
+                                font_size == 18,
+                                Box::new(SelectFont(18)),
+                            )
+                            .menu_with_check(
+                                crate::i18n::localize("titlebar_font_medium_default"),
                                 font_size == 16,
                                 Box::new(SelectFont(16)),
                             )
-                            .menu_with_check("Small", font_size == 14, Box::new(SelectFont(14)))
+                            .menu_with_check(
+                                crate::i18n::localize("titlebar_font_small"),
+                                font_size == 14,
+                                Box::new(SelectFont(14)),
+                            )
                             .separator()
-                            .label("Border Radius")
+                            .label(crate::i18n::localize("titlebar_border_radius"))
                             .menu_with_check("8px", radius == 8, Box::new(SelectRadius(8)))
                             .menu_with_check(
-                                "6px (default)",
+                                crate::i18n::localize("titlebar_radius_default"),
                                 radius == 6,
                                 Box::new(SelectRadius(6)),
                             )
@@ -196,9 +207,10 @@ impl Render for SettingsDropdown {
 
 /// Announced name for the icon-only search button, derived from the
 /// ToggleSearch binding so the modifier matches the platform keymap.
-fn search_a11y_label() -> String {
+fn search_a11y_label(cx: &App) -> String {
     format!(
-        "Search ({})",
-        crate::app::keys::label(crate::app::keys::TOGGLE_SEARCH)
+        "{} ({})",
+        crate::i18n::localize("titlebar_search"),
+        crate::app::keys::label(crate::app::keys::TOGGLE_SEARCH, cx.platform_info().os)
     )
 }

@@ -5,26 +5,16 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::*, *};
 
-use gpui_query::core::QueryStatus;
-
 use super::super::QueryPlaygroundPage;
-use super::super::ui_helpers::{chip, section_card, status_badge};
+use super::super::ui_helpers::{
+    chip, fetch_label, query_data, query_status, section_card, status_badge,
+};
 
 impl QueryPlaygroundPage {
     pub(in super::super) fn render_simple_query(&mut self, cx: &mut Context<Self>) -> Div {
-        let loading = self.simple_query.as_ref().map_or(false, |(e, _)| {
-            e.read_with(cx, |r, _| r.status().is_loading())
-        });
-        let status = self
-            .simple_query
-            .as_ref()
-            .map_or(QueryStatus::Idle, |(e, _)| {
-                e.read_with(cx, |r, _| r.status())
-            });
-        let data_preview = self
-            .simple_query
-            .as_ref()
-            .and_then(|(e, _)| e.read_with(cx, |r, _| r.data().cloned()));
+        let status = query_status(self.simple_query.as_ref(), cx);
+        let loading = status.is_loading();
+        let data_preview = query_data(self.simple_query.as_ref(), cx);
         let cache_age = self.simple_query.as_ref().and_then(|(e, _)| {
             e.read_with(cx, |r, _| {
                 let now = crate::platform::clock::SystemTime::now()
@@ -38,8 +28,9 @@ impl QueryPlaygroundPage {
         let bg = cx.theme().background;
 
         section_card(
-            "Simple Query",
-            "Basic fetch with NoCache + LatestWins. Simulates 1s async work.",
+            "simple",
+            &crate::i18n::localize("query_playground_simple_title"),
+            &crate::i18n::localize("query_playground_simple_description"),
             cx,
         )
         .child(
@@ -51,21 +42,21 @@ impl QueryPlaygroundPage {
                 .child(
                     Button::new("pg-simple-fetch")
                         .primary()
-                        .label(if loading { "Fetching..." } else { "Fetch" })
+                        .label(fetch_label(loading))
                         .disabled(loading)
                         .on_click(cx.listener(|this, _, _, cx| this.fetch_simple(cx))),
                 )
                 .child(
                     Button::new("pg-simple-cancel")
                         .outline()
-                        .label("Cancel")
+                        .label(crate::i18n::localize("query_playground_cancel"))
                         .disabled(!loading)
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_simple(cx))),
                 )
                 .child(
                     Button::new("pg-simple-reset")
                         .outline()
-                        .label("Reset")
+                        .label(crate::i18n::localize("query_playground_reset"))
                         .on_click(cx.listener(|this, _, _, cx| this.reset_simple(cx))),
                 ),
         )
@@ -85,7 +76,16 @@ impl QueryPlaygroundPage {
                     ))
                 })
                 .when_some(cache_age, |el, age| {
-                    el.child(chip("simple-age", &format!("age: {}ms", age), bg, cx))
+                    el.child(chip(
+                        "simple-age",
+                        &format!(
+                            "{}: {}ms",
+                            crate::i18n::localize("query_playground_cache_age"),
+                            age
+                        ),
+                        bg,
+                        cx,
+                    ))
                 }),
         )
     }

@@ -13,6 +13,7 @@ use gpui_kit::component::{
         SankeyLabel,
     },
     h_flex,
+    plot::PlotAppearScope,
     plot::shape::{BarAlignment, SankeyAlign, SankeyLink, SankeyValueScale},
     scroll::ScrollableElement as _,
     separator::Separator,
@@ -200,10 +201,13 @@ pub(crate) struct ChartData {
     tsla_statements: Vec<(SharedString, Vec<TslaNode>, Vec<SankeyLink>)>,
 }
 
-/// `1234` as `1.2K`, `1234567` as `1.2M`; smaller numbers keep their digits.
+/// `1234` as `1.2K`, `1234567` as `1.2M`, `1.2e9` as `1.2B`; smaller numbers
+/// keep their digits.
 pub(crate) fn compact(value: f64) -> String {
     let magnitude = value.abs();
-    if magnitude >= 1_000_000. {
+    if magnitude >= 1_000_000_000. {
+        format!("{:.1}B", value / 1_000_000_000.)
+    } else if magnitude >= 1_000_000. {
         format!("{:.1}M", value / 1_000_000.)
     } else if magnitude >= 10_000. {
         format!("{:.0}K", value / 1_000.)
@@ -1340,7 +1344,10 @@ impl ChartCard {
                         .value_label(|d, _| format!("${:.2}B", d.value / 1_000_000_000.).into())
                 };
 
-                let revenue = nodes.first();
+                let revenue = nodes
+                    .iter()
+                    .find(|node| node.name.as_ref() == "Total Revenue")
+                    .or_else(|| nodes.first());
                 Card::new("TSLA Income Statement", period.clone())
                     .chart(chart)
                     .headline(match revenue {
@@ -1652,42 +1659,51 @@ impl Render for ChartSection {
                 ),
             )
             .child(
-                div()
-                    .id(ElementId::NamedInteger(
-                        "chart-gallery".into(),
-                        self.appear_generation,
-                    ))
-                    // The virtualized card list owns this frame's scroll; the
-                    // gallery pane owns scrolling everywhere else.
-                    .h(rems(37.5))
-                    .w_full()
-                    .child(
-                        list(self.list_state.clone(), move |index, _, cx| {
-                            let Some(row) = rows.get(index) else {
-                                return div().into_any_element();
-                            };
+                // The scope keeps its id while Replay re-keys the div inside
+                // it: finished appears survive list remounts, a re-key replays.
+                PlotAppearScope::new(
+                    "chart-gallery-appear",
+                    div()
+                        .id(ElementId::NamedInteger(
+                            "chart-gallery".into(),
+                            self.appear_generation,
+                        ))
+                        // The virtualized card list owns this frame's scroll;
+                        // the gallery pane owns scrolling everywhere else.
+                        .h(rems(37.5))
+                        .w_full()
+                        .child(
+                            list(self.list_state.clone(), move |index, _, cx| {
+                                let Some(row) = rows.get(index) else {
+                                    return div().into_any_element();
+                                };
 
-                            div()
-                                .w_full()
-                                .px(CONTENT_INSET)
-                                // Spacing between rows only, like a CSS gap.
-                                .when(index + 1 < rows.len(), |this| this.pb(CARD_GAP))
-                                .child(match row {
-                                    ChartRow::Rule => Separator::horizontal().into_any_element(),
-                                    ChartRow::Cards(cards) => h_flex()
-                                        .w_full()
-                                        .gap(CARD_GAP)
-                                        .children(cards.iter().map(|card| card.render(&data, cx)))
-                                        .into_any_element(),
-                                })
-                                .into_any_element()
-                        })
-                        .size_full()
-                        // The list style honours vertical padding only, so the
-                        // horizontal inset rides on each row above.
-                        .pb(CONTENT_INSET),
-                    )
-                    .vertical_scrollbar(&self.list_state),
+                                div()
+                                    .w_full()
+                                    .px(CONTENT_INSET)
+                                    // Spacing between rows only, like a CSS gap.
+                                    .when(index + 1 < rows.len(), |this| this.pb(CARD_GAP))
+                                    .child(match row {
+                                        ChartRow::Rule => {
+                                            Separator::horizontal().into_any_element()
+                                        }
+                                        ChartRow::Cards(cards) => h_flex()
+                                            .w_full()
+                                            .gap(CARD_GAP)
+                                            .children(
+                                                cards.iter().map(|card| card.render(&data, cx)),
+                                            )
+                                            .into_any_element(),
+                                    })
+                                    .into_any_element()
+                            })
+                            .size_full()
+                            // The list style honours vertical padding only, so
+                            // the horizontal inset rides on each row above.
+                            .pb(CONTENT_INSET),
+                        )
+                        .vertical_scrollbar(&self.list_state),
+                ),
             )
     }
 }

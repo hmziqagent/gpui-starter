@@ -1,12 +1,18 @@
 mod apply;
 mod check;
-mod download;
 mod types;
 
 use gpui_kit::UpdateGlobal as _;
 
 // Re-exported so external import paths stay stable.
-pub use types::{CheckForUpdates, PlatformAsset, UpdateManifest, UpdateSnapshot, UpdateStatus};
+pub use types::{PlatformAsset, UpdateManifest, UpdateSnapshot, UpdateStatus};
+
+// The loops only exist behind #[cfg(not(target_family = "wasm"))] in
+// initialize, so the pure decision helper is dead code on wasm.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+fn auto_checks_enabled(update_check_on_startup: bool, manifest_url: &str) -> bool {
+    update_check_on_startup && manifest_url != types::PLACEHOLDER_MANIFEST_URL
+}
 
 pub fn initialize(cx: &mut gpui_kit::App) {
     let channel = crate::app_state::update_channel(cx);
@@ -20,62 +26,69 @@ pub fn initialize(cx: &mut gpui_kit::App) {
             channel
         },
         check_retry_count: 0,
-        download_retry_count: 0,
         ..Default::default()
     });
 
-    cx.on_action(|_: &CheckForUpdates, cx| {
-        check::check_for_updates(cx);
-    });
-
     // Self-update is desktop-only (binary swap on disk); wasm ships updates
-    // with the page reload. The action handler above still runs either way.
+    // with the page reload.
     #[cfg(not(target_family = "wasm"))]
     {
-        // GPUI background-executor timers instead of a spawned tokio sleep task.
-        cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(
-                    types::STARTUP_CHECK_DELAY_SECS,
-                ))
-                .await;
-            cx.update(|cx| {
-                tracing::info!(
-                    target: "gpui_starter::updater",
-                    "running startup update check"
-                );
-                check::check_for_updates(cx);
-            });
-        })
-        .detach();
-
-        cx.spawn(async move |cx| {
-            loop {
+        // A placeholder build endpoint must never auto-poll (RCA §7.5); the
+        // config opt-in alone is not enough to arm the loops.
+        if auto_checks_enabled(
+            crate::app_state::with_config(cx, |config| config.update_check_on_startup),
+            types::DEFAULT_MANIFEST_URL,
+        ) {
+            // GPUI background-executor timers instead of a spawned tokio sleep task.
+            cx.spawn(async move |cx| {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(
-                        types::PERIODIC_CHECK_INTERVAL_SECS,
+                        types::STARTUP_CHECK_DELAY_SECS,
                     ))
                     .await;
-
-                let should_check: bool = cx.update(|cx| {
-                    let snap = snapshot(cx);
-                    matches!(
-                        snap.status,
-                        UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Error(_)
-                    )
+                cx.update(|cx| {
+                    tracing::info!(
+                        target: "gpui_starter::updater",
+                        "running startup update check"
+                    );
+                    check::check_for_updates(cx);
                 });
-                if should_check {
-                    cx.update(|cx| {
-                        tracing::info!(
-                            target: "gpui_starter::updater",
-                            "running periodic update check"
-                        );
-                        check::check_for_updates(cx);
+            })
+            .detach();
+
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(
+                            types::PERIODIC_CHECK_INTERVAL_SECS,
+                        ))
+                        .await;
+
+                    let should_check: bool = cx.update(|cx| {
+                        let snap = snapshot(cx);
+                        matches!(
+                            snap.status,
+                            UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Error(_)
+                        )
                     });
+                    if should_check {
+                        cx.update(|cx| {
+                            tracing::info!(
+                                target: "gpui_starter::updater",
+                                "running periodic update check"
+                            );
+                            check::check_for_updates(cx);
+                        });
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        } else {
+            tracing::info!(
+                target: "gpui_starter::updater",
+                "automatic update checks disabled (no opt-in or placeholder manifest url)"
+            );
+        }
     }
 
     tracing::info!(
@@ -91,39 +104,8 @@ pub fn snapshot(cx: &gpui_kit::App) -> UpdateSnapshot {
         .unwrap_or_default()
 }
 
-pub fn check_for_updates(cx: &mut gpui_kit::App) {
-    check::check_for_updates(cx);
-}
-
-pub fn download_update(cx: &mut gpui_kit::App) {
-    download::download_update(cx);
-}
-
-pub fn apply_update(cx: &mut gpui_kit::App) {
-    apply::apply_update(cx);
-}
-
 pub fn check_pending_swap(cx: &mut gpui_kit::App) {
     apply::check_pending_swap(cx);
-}
-
-pub fn set_channel(channel: &str, cx: &mut gpui_kit::App) {
-    let ch = if channel.is_empty() {
-        "stable".to_string()
-    } else {
-        channel.to_string()
-    };
-    UpdateSnapshot::update_global(cx, |snap, _cx| {
-        snap.update_channel = ch.clone();
-    });
-    crate::app_state::update_config(cx, |config| {
-        config.update_channel = ch;
-    });
-    tracing::info!(
-        target: "gpui_starter::updater",
-        channel = %channel,
-        "update channel set"
-    );
 }
 
 fn set_status(status: UpdateStatus, cx: &mut gpui_kit::App) {
@@ -143,24 +125,14 @@ fn reset_check_retry(cx: &mut gpui_kit::App) {
     });
 }
 
-fn reset_download_retry(cx: &mut gpui_kit::App) {
-    UpdateSnapshot::update_global(cx, |snap, _cx| {
-        snap.download_retry_count = 0;
-    });
-}
-
 fn notify_update_available(version: &str, cx: &mut gpui_kit::App) {
     dispatch_background_notification(
-        &format!("Update v{version} available"),
-        "A new version is available. Open settings to download and install.",
-        cx,
-    );
-}
-
-fn notify_update_downloaded(version: &str, cx: &mut gpui_kit::App) {
-    dispatch_background_notification(
-        &format!("Update v{version} ready"),
-        "Update downloaded — restart to apply.",
+        &format!(
+            "{} v{version} {}",
+            crate::i18n::localize("updates_title_prefix"),
+            crate::i18n::localize("updates_available_suffix")
+        ),
+        &crate::i18n::localize("updates_available_body"),
         cx,
     );
 }
@@ -168,8 +140,8 @@ fn notify_update_downloaded(version: &str, cx: &mut gpui_kit::App) {
 /// Permanent update errors only (retries exhausted).
 fn notify_update_error(cx: &mut gpui_kit::App) {
     dispatch_background_notification(
-        "Update check failed",
-        "Could not check or download updates. Please try again later.",
+        &crate::i18n::localize("updates_error_title"),
+        &crate::i18n::localize("updates_error_body"),
         cx,
     );
 }
@@ -181,16 +153,13 @@ fn dispatch_background_notification(title: &str, body: &str, cx: &mut gpui_kit::
             title: title.to_string(),
             body: body.to_string(),
             backend: crate::notifications::NotificationBackendKind::UiOnly,
-            delivered_natively: false,
-            degraded: false,
             error_summary: None,
-            kind: crate::notifications::inbox::NotificationInboxKind::SettingsUpdate,
         },
         cx,
     );
 
     let state = match cx.try_global::<crate::notifications::NativeNotificationState>() {
-        Some(s) => s.clone(),
+        Some(state) => state,
         None => return,
     };
     let enabled_by_user = state.snapshot.enabled_by_user

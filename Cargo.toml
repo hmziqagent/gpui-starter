@@ -1,29 +1,25 @@
 [workspace]
+members = ["collab-protocol", "collab-server", "crates/gpui-auth"]
 
 [workspace.dependencies]
-# gpui-form from the freeoxide fork; rev = the migration branch HEAD on
-# sync/gpui-kit-0.7.0.
-gpui-form = { git = "https://github.com/freeoxide/gpui-form", rev = "f7e2fb0b30c1285638f1a877489dc03ad084319a" }
+# gpui-form from the freeoxide fork (package freeoxide-gpui-form, lib name
+# gpui_form); rev = the origin/master kit-0.8.1 tracking merge (PR #14).
+gpui-form = { package = "freeoxide-gpui-form", git = "https://github.com/freeoxide/gpui-form", rev = "62a8b7daef1de69df4de9b7e0175c1a6eb25f19e" }
 
-# GPUI ecosystem — gpui-kit is the single application-facing dependency.
-# crates.io `gpui-pre` is the published snapshot of zed gpui (PACKAGE name
-# gpui-pre, lib name stays `gpui`); gpui-kit 0.7.0 builds on it, pins the
-# whole gpui-pre-* snapshot family to =0.3.7, and enables
-# font-kit/x11/wayland/runtime_shaders on gpui-pre-platform itself, so
-# backend selection needs no direct platform dependency. GPUI itself is
-# `use gpui_kit::*`; the layers are `gpui_kit::component` / `base` /
-# `assets` / `platform`. qa_migration.rs fails the build if a source file
-# imports any of those crates by their own names.
-# gpui-kit and gpui are direct deps for the same reason: the pinned
-# gpui-form rev's derives emit both ::gpui_kit::component paths and
-# ::gpui::Entity/Window/Context into consuming crates (see
-# crates/gpui-form-codegen/src/implementations/*.rs), so hand-written code
-# uses kit paths only while the macros still need both crate names.
+# GPUI ecosystem — gpui-kit is the single application-facing dependency
+# (`use gpui_kit::*`; layers: component / base / assets / platform).
+# gpui-pre is the crates.io snapshot of zed gpui (package name gpui-pre,
+# lib name `gpui`); gpui-kit 0.8.1 pins the gpui-pre-* family to =0.3.10.
+# gpui-kit enables font-kit/x11/wayland/runtime_shaders on gpui-pre-platform
+# itself, so backend selection needs no direct platform dependency.
+# qa_migration.rs fails the build if a source file imports gpui-pre or the
+# kit's layer crates by their own names.
+# gpui-form's derives emit ::gpui_kit::component and ::gpui:: paths into
+# consumers (see gpui-form-codegen), so gpui stays a direct dep too.
 # Never add a direct `accesskit` dep: the kit re-exports gpui's accesskit
-# (0.24.x) and a separately-versioned accesskit is type-incompatible with
-# the bridge.
-gpui = { package = "gpui-pre", version = "0.3.7" }
-gpui-kit = "0.7.0"
+# (0.24.x) and a separately-versioned copy is type-incompatible.
+gpui = { package = "gpui-pre", version = "0.3.10" }
+gpui-kit = "0.8.1"
 
 # Serialization & data
 anyhow = "1"
@@ -48,20 +44,14 @@ tracing-subscriber = { version = "0.3", features = [
 ], default-features = false }
 
 # i18n
-rust-i18n = "3"
+rust-i18n = "4"
 regex = "1"
-# es-fluent 0.16 family from crates.io — the line the migrated gpui-form
-# graph resolves; one copy keeps our directly-used satellites in lockstep.
-es-fluent = { version = "0.16", features = ["derive"] }
-es-fluent-build = "0.16"
-es-fluent-lang = "0.16"
-es-fluent-manager-embedded = "0.16"
 
 # Validation
 # koruma 0.9 family from crates.io — the line the migrated gpui-form graph
 # resolves (gpui-form-derive 0.9 emits consumer-resolved koruma code).
-koruma = { version = "0.9", features = ["fluent"] }
-koruma-collection = { version = "0.9", features = ["full-fluent"] }
+koruma = "0.9"
+koruma-collection = { version = "0.9", features = ["email", "phone-number", "url"] }
 
 # Proc-macro infrastructure
 darling = "0.23"
@@ -98,6 +88,41 @@ publish = false
 description = "A full-featured desktop application boilerplate built with GPUI (Zed's UI toolkit)"
 repository = "https://github.com/freeoxide/gpui-starter"
 
+# cargo-deb config; scripts/build-deb.sh must run first: it stages
+# target/deb-stage/ (binary rpathed to $ORIGIN/../lib/gpui-starter + bundled
+# libs) which the first two assets consume. Bundled-layout rationale:
+# docs/research/linux-packages.md.
+[package.metadata.deb]
+maintainer = "gpui-starter contributors <hmziqrs@users.noreply.github.com>"
+copyright = "2026 hmziqrs"
+license-file = ["LICENSE", 0]
+depends = "$auto"
+suggests = "mesa-vulkan-drivers"
+assets = [
+    ["target/deb-stage/gpui-starter", "usr/bin/gpui-starter", "755"],
+    ["target/deb-stage/lib/*", "usr/lib/gpui-starter/", "644"],
+    ["resources/com.gpui-starter.app.desktop", "usr/share/applications/com.gpui-starter.app.desktop", "644"],
+    ["resources/com.gpui-starter.app.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["assets/app-icon/hicolor/*/*/*", "usr/share/icons/hicolor/", "644"],
+]
+
+# cargo-generate-rpm config; scripts/build-rpm.sh must run first: it stages
+# target/rpm-stage/ (binary rpathed to $ORIGIN/../lib/gpui-starter + bundled
+# libs) which the first two assets consume. Requires stay auto-detected (rpm
+# auto-req over the binary's NEEDED entries); rationale:
+# docs/research/linux-packages.md.
+[package.metadata.generate-rpm]
+# The tool hard-errors without a License tag and [package] sets no `license`.
+license = "MIT"
+assets = [
+    { source = "target/rpm-stage/gpui-starter", dest = "/usr/bin/gpui-starter", mode = "755" },
+    { source = "target/rpm-stage/lib/*", dest = "/usr/lib/gpui-starter/", mode = "644" },
+    { source = "resources/com.gpui-starter.app.desktop", dest = "/usr/share/applications/com.gpui-starter.app.desktop", mode = "644" },
+    { source = "resources/com.gpui-starter.app.metainfo.xml", dest = "/usr/share/metainfo/com.gpui-starter.app.metainfo.xml", mode = "644" },
+    { source = "assets/app-icon/hicolor/*/*/*", dest = "/usr/share/icons/hicolor/", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/gpui-starter/LICENSE", mode = "644" },
+]
+
 [lib]
 # rlib: consumed by the bin and by `cargo test -p gpui-starter --lib`;
 # cdylib: the wasm32-unknown-unknown web artifact post-processed by
@@ -108,26 +133,34 @@ crate-type = ["rlib", "cdylib"]
 # Enable OTLP export over HTTP/Protobuf for the telemetry module.
 # See src/telemetry.rs for the full list of optional dependencies this pulls in.
 otlp = ["dep:opentelemetry-otlp", "dep:opentelemetry_sdk"]
-websocket = ["dep:tokio-tungstenite"]
 # AI chat streaming page (default OFF). flume is unconditional
 # (services/streaming.rs needs it regardless), so this is an empty gate
 # that only controls the ai_chat feature-page module.
 ai-chat = []
+# Element-tree inspector (default OFF): cargo run --features devtools, then
+# ctrl-alt-i (cmd-alt-i on macOS). gpui-devtools 0.5 targets gpui-pre ^0.3.6,
+# so it resolves to the lock's single 0.3.10 copy; `gpui/inspector` turns on
+# the inspector support the release build would otherwise compile out.
+devtools = ["dep:gpui-devtools", "gpui/inspector"]
 # XDG Desktop Portal notification backend for Flatpak/Snap/sandboxed runs
 # (default OFF). When ON and running sandboxed, notifications route through
 # org.freedesktop.portal.Notification via ashpd (reuses the transitive 0.13.x
 # already compiled via gpui_linux/oo7). Native installs never need this.
 notifications-portal = ["dep:ashpd"]
+# PR artifact builds (.github/workflows/pr-builds.yml): rust-embed's live-fs
+# debug mode finds nothing off-machine — feature-unified so kit icons embed.
+artifact = ["rust-embed/debug-embed"]
 
 [dependencies]
 gpui.workspace = true
-# Version is a range (not `^0.1.4`) so the git override in [patch.crates-io]
-# (branch gpui-pre-0.6 = v0.2.1 wasm support + release-profile fix + gpui-pre swap)
-# actually satisfies this requirement and is applied. With a strict
-# `^0.1.4`-only pin Cargo can silently drop a future patch as
-# `[[patch.unused]]` and build the registry version regardless.
-gpui-query = { version = ">=0.1.4, <0.3.0", features = ["hook"] }
+# Version tracks the bridge's stamped crate version: the [patch.crates-io]
+# override below swaps the source, and cargo silently demotes a patch to
+# `[[patch.unused]]` when the pinned source's version doesn't satisfy this
+# requirement. Move both together — tests/qa_migration.rs guards the rev.
+gpui-query = { version = "0.3", features = ["hook"] }
 gpui-kit.workspace = true
+# Dev-only element inspector behind the `devtools` feature; see [features].
+gpui-devtools = { version = "0.5.1", optional = true }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -137,12 +170,10 @@ tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 rust-i18n.workspace = true
+unic-langid.workspace = true
 regex.workspace = true
 koruma.workspace = true
 koruma-collection.workspace = true
-es-fluent.workspace = true
-es-fluent-lang.workspace = true
-es-fluent-manager-embedded.workspace = true
 strum.workspace = true
 gpui-form.workspace = true
 # user-notify / notify-rust live in the not-wasm target section (D-Bus/mac
@@ -158,7 +189,6 @@ ed25519-dalek = { version = "2", features = ["std"] }
 base64 = "0.22"
 sha2 = "0.10"
 futures-util = "0.3"
-tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
 tempfile = "3.27.0"
 reqwest = { version = "0.12.24", default-features = false, features = [
     "cookies",
@@ -177,19 +207,64 @@ opentelemetry_sdk = { version = "0.24.1", optional = true, features = [
     "rt-tokio",
     "trace",
 ] }
-rfd = "0.15.4"
 notify = "8.2.0"
 undo = "0.52.0"
 sys-locale = "0.3"
 flume = "0.11"
 fuzzy-matcher = "0.3"
-rust-embed = "8"
+rust-embed = { version = "8", features = ["include-exclude"] }
+# ui::waveform: rtrb is the SPSC ring between audio callback and UI tick;
+# rustfft drives the spectrum analyzer. Both compile on wasm32.
+rtrb = "0.4"
+rustfft = "6.4"
+# Canvas showcase image demo: RenderImage construction needs image::Frame on
+# every platform (the target tables' png-only lines predate the common entry;
+# png+jpeg is the union with plan 14's needs). Pure Rust, wasm-clean.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Audio playback decode (services/audio): hound is the .wav fast path,
+# symphonia covers FLAC/MP3/OGG. Both pure Rust and wasm32-clean; output
+# itself goes through the native-only cpal entry in the not-wasm table.
+# "pcm" is the 16-bit WAV codec symphonia's own wav path decodes.
+hound = "3.5"
+symphonia = { version = "0.6.1", default-features = false, features = [
+    "wav",
+    "pcm",
+    "flac",
+    "mp3",
+    "ogg",
+    "vorbis",
+    "aac",
+    "isomp4",
+    "alac",
+] }
+# Shared wire types for the multiuser-canvas page and collab-server.
+collab-protocol = { path = "collab-protocol" }
+# Auth foundation (plan 21): token model, PKCE, provider trait, controller
+# entity; the app adapter is src/services/auth.rs. mock stays dev/demo-only
+# until plan 22 registers real providers.
+gpui-auth = { path = "crates/gpui-auth", features = ["mock-provider"] }
+# Floating window shims (src/ui/floating/shims/): raw platform handles on
+# every target incl. wasm (the crate defines the Web handle; wasm-clean).
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 insta.workspace = true
 # Test-only: TestAppContext + deterministic timers for the config-store
 # debounce tests. Dev-dep features never reach production or wasm builds.
-gpui = { package = "gpui-pre", version = "0.3.7", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "0.3.10", features = ["test-support"] }
+# GPU-free WGSL validation; same version as the lock's naga.
+naga = { version = "=30.0.1", features = ["wgsl-in"] }
+
+# Test-only (plan 22 email-auth e2e): fast argon2 cost params for the demo
+# backend. Same target gate as the gpui-auth lines so the wasm lane never
+# resolves them.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+argon2 = "0.5.3"
+
+# Windows .exe icon embed; the target gate keeps Linux, macOS, and wasm
+# builds from compiling it (docs/research/icons-and-windows.md A2).
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
@@ -203,6 +278,7 @@ objc2-foundation = { version = "0.3.0", default-features = false, features = [
     "std",
     "NSBundle",
     "NSError",
+    "NSProcessInfo",
     "NSString",
 ] }
 objc2-user-notifications = { version = "0.3.0", default-features = false, features = [
@@ -215,8 +291,23 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSView",
     "NSWindow",
+    "NSScreen",
 ] }
-raw-window-handle = "0.6"
+# Microphone TCC permission (services/microphone/permission.rs). Only the
+# authorization surface; pairs with the locked objc2/block2/foundation line.
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "AVCaptureDevice",
+    "AVMediaFormat",
+    "block2",
+] }
+# System controls page (plan 17): CoreAudio HAL volume + IOBluetooth power and
+# paired devices. AudioHardware covers every AudioObject* symbol used.
+objc2-core-audio = { version = "0.3.0", default-features = false, features = [
+    "std",
+    "AudioHardware",
+] }
+objc2-io-bluetooth = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Optional: XDG Desktop Portal notification backend (enable with --features
@@ -231,6 +322,26 @@ ashpd = { version = "0.13", optional = true, default-features = false, features 
     "notification",
     "async-io",
 ] }
+# X11 window icon: decodes the embedded 48px brand PNG for
+# WindowOptions.icon (image is already in the lock via gpui-pre; png-only
+# keeps the lock's feature set from growing).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# X11 EWMH/XShape window shims (src/ui/floating/shims/x11.rs) over the
+# same x11rb 0.13 the lock already carries for gpui-pre-linux; shape gates
+# the XShape protocol module, allow-unsafe-code gates xcb_ffi (wrapping
+# the live connection; no second X connection is opened).
+x11rb = { version = "0.13", default-features = false, features = [
+    "allow-unsafe-code",
+    "shape",
+] }
+# System controls page (plan 17): BlueZ runs on the system bus (zbus blocking
+# wrappers under the default async-io runtime; never add the zbus `tokio`
+# feature alongside async-io); libpulse-binding speaks the native protocol
+# against both PulseAudio and pipewire-pulse (needs libpulse-dev at build
+# time, scripts/install-linux-deps.sh); brightness reads/sets the backlight.
+zbus = "5"
+libpulse-binding = "2.30"
+brightness = "0.8"
 
 # Unpackaged Win32 apps need a Start Menu shortcut carrying the toast AUMID or
 # Windows silently drops every toast; see src/platform/toast_identity.rs. Same
@@ -240,6 +351,9 @@ ashpd = { version = "0.13", optional = true, default-features = false, features 
 # user-notify uses).
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
+# Decodes the embedded branded 16px tray PNG (same png-only 0.25 line as
+# the linux table; rust-embed is already an unconditional dependency).
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Select multiplexes tray-icon's two global crossbeam channels onto the one
 # gpui-tray-events drain thread.
 crossbeam-channel = "0.5"
@@ -252,6 +366,8 @@ windows = { version = "0.61", features = [
     "Data_Xml_Dom",
     "Foundation_Collections",
     "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
@@ -262,6 +378,8 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "UI_Notifications",
 ] }
+# System controls page (plan 17): backlight via the brightness crate.
+brightness = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -275,9 +393,34 @@ libc = "0.2"
 single-instance = "0.3.3"
 interprocess = "2.4.2"
 network-interface = "2.0.3"
+# Gallery editor highlighting: grammars for the sample languages (json rides
+# on tree-sitter-javascript). Wasm compiles without grammars — the editors
+# render plain there, matching the kit's own story app.
+gpui-kit = { workspace = true, features = [
+    "tree-sitter-astro",
+    "tree-sitter-c",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-javascript",
+    "tree-sitter-kotlin",
+    "tree-sitter-lua",
+    "tree-sitter-markdown",
+    "tree-sitter-php",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-sql",
+    "tree-sitter-svelte",
+    "tree-sitter-typescript",
+    "tree-sitter-zig",
+] }
 # Per-platform credential stores; a platform left without its store feature
 # silently falls back to keyring's per-entry mock (writes vanish, reads miss).
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+keyring = { version = "3.6.3", features = [
+    "apple-native",
+    "linux-native",
+    "windows-native",
+] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 notify-rust = "4.17.0"
 # `open` hits compile_error!("open is not supported on this platform") and
@@ -294,13 +437,38 @@ tracing-appender = "0.2"
 # (rt + sync + time): `net` and `io-util` have no wasm implementation, and
 # `rt-multi-thread` (tokio_runtime's dedicated I/O runtime) needs threads.
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+# Socket.io client for the multiuser-canvas page's live sync; its async
+# feature set needs the tokio features above on a dedicated thread
+# (src/features/pages/multiuser_canvas/net.rs).
+rust_socketio = { version = "0.6", default-features = false, features = ["async"] }
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
+# Microphone input (services/microphone). ALSA backend needs libasound2-dev
+# at build time (scripts/install-linux-deps.sh); no wasm32 story.
+cpal = "0.18"
+# System controls page (plan 17): cross-platform battery reader.
+starship-battery = "0.12"
+# Social login (services/auth_social, plan 23). oauth2 serves the GitHub
+# flow (no OIDC discovery there); openidconnect adds discovery, id_token
+# validation, and userinfo for Google + generic issuers. reqwest+rustls-tls
+# subset the app's reqwest line above, so one copy resolves in the lock.
+oauth2 = { version = "5.0", default-features = false, features = [
+    "reqwest",
+    "rustls-tls",
+] }
+openidconnect = { version = "4.0", default-features = false, features = [
+    "reqwest",
+    "rustls-tls",
+] }
+# Exact pin shares the lock's single wgpu copy with gpui-pre-wgpu; any other
+# version compiles a second full wgpu/naga stack into the binary.
+wgpu = { version = "=30.0.1" }
 
 # Web (wasm32-unknown-unknown) dependencies.
 [target.'cfg(target_family = "wasm")'.dependencies]
-# Exact pin: Cargo.lock carries wasm-bindgen 0.2.125 through the gpui web
+# Exact pin: Cargo.lock carries wasm-bindgen 0.2.129 through the gpui web
 # stack (gpui-pre-web), and the wasm-bindgen CLI version used by the web
-# harness MUST match the crate version — keep both at 0.2.125.
-wasm-bindgen = "=0.2.125"
+# harness MUST match the crate version — keep both at 0.2.129.
+wasm-bindgen = "=0.2.129"
 # std::time::{Instant, SystemTime} COMPILE on wasm32-unknown-unknown but PANIC
 # at runtime ("time not implemented on this platform"). The gpui web stack
 # routes its clocks through web-time (browser performance.now()/Date); the app
@@ -320,15 +488,15 @@ chrono = { version = "0.4", features = ["wasmbind"] }
 # The feature set is the UNION of every wasm area's needs:
 #   - B (this crate, browser integrations): Clipboard, Window, Navigator,
 #     Location, History, Document, HtmlHeadElement, HtmlLinkElement,
-#     HtmlCanvasElement, CanvasRenderingContext2d, Event, EventTarget,
-#     AddEventListenerOptions
+#     HtmlCanvasElement, HtmlImageElement, CanvasRenderingContext2d, Event,
+#     EventTarget, AddEventListenerOptions
 #   - C (web notifications): Notification, NotificationOptions,
 #     NotificationDirection
 #   - D (SQLite-on-OPFS worker): Worker, WorkerOptions, MessageEvent,
 #     MessagePort, Storage, StorageManager, Blob, Url
 # (Document/Html* transitively enable Element/Node; Window/Clipboard/Node
 # transitively enable EventTarget.)
-web-sys = { version = "=0.3.102", features = [
+web-sys = { version = "=0.3.106", features = [
     "AddEventListenerOptions",
     "Blob",
     "CanvasRenderingContext2d",
@@ -339,6 +507,7 @@ web-sys = { version = "=0.3.102", features = [
     "History",
     "HtmlCanvasElement",
     "HtmlHeadElement",
+    "HtmlImageElement",
     "HtmlLinkElement",
     "Location",
     "MessageEvent",
@@ -355,11 +524,8 @@ web-sys = { version = "=0.3.102", features = [
     "WorkerOptions",
 ] }
 # Promise/Reflect/JsValue interop for the fire-and-forget clipboard write and
-# the DOM event closures. Exact pin: matches the locked wasm-bindgen =0.2.125.
-js-sys = "=0.3.102"
-
-[build-dependencies]
-es-fluent-build.workspace = true
+# the DOM event closures. Exact pin: matches the locked wasm-bindgen =0.2.129.
+js-sys = "=0.3.106"
 
 
 [profile.dev]
@@ -372,6 +538,10 @@ split-debuginfo = "unpacked"
 # the main consumer. Native release builds benefit equally.
 [profile.release]
 lto = "thin"
+# Line tables without full debuginfo keep release backtraces line-resolvable;
+# strip stays off so crash reports from shipped builds still symbolize.
+debug = "line-tables-only"
+strip = "none"
 
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
@@ -380,15 +550,15 @@ gpui-pre-macros = { opt-level = 3 }
 
 [patch.crates-io]
 # gpui-query source toggle: `just gpui-query-local` / `just gpui-query-cratesio`.
-# DEFAULT (git): hmziqagent/gpui-query branch `gpui-pre-0.6` @1449ef2 =
-# v0.2.1 (wasm support, published) merged with the gpui-pre re-point; the
-# workspace root pins `gpui = { package = "gpui-pre", version = "0.3" }` — no published or upstream version targets gpui-pre yet, so this
-# patch carries the release fix AND re-points the crate onto registry gpui-pre
+# DEFAULT (git): hmziqagent/gpui-query branch `gpui-pre-0.6` @69a071f =
+# v0.3.0 (perf campaign, published) merged with the gpui-pre re-point; the
+# workspace root pins `gpui = { package = "gpui-pre", version = "0.3.10" }` — no published or upstream version targets gpui-pre yet, so this
+# patch carries the 0.3.0 line AND re-points the crate onto registry gpui-pre
 # (keeping the graph at ONE gpui). Drop this patch once upstream ships
 # gpui-pre support on crates.io. The old 0.1.4-based fix (f84eac4) remains on
 # branch fix/release-appcontext as the Phase-1 rollback pin. Keep exactly ONE
 # line active — a duplicate gpui-query key is a TOML error.
 # >>> gpui-query-local >>>
-gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "1449ef2" }
+gpui-query = { git = "https://github.com/hmziqagent/gpui-query", rev = "69a071f" }
 # gpui-query = { path = "/Users/hmziq/fo/gpui-query/crates/gpui-query" }
 # <<< gpui-query-local <<<

@@ -44,8 +44,20 @@ wasm-serve:
 test:
     cargo test --workspace --all-features
 
+# Opt-in wall-clock perf lane: the pan-frame budget test is #[ignore]d in the
+# default gates because loaded runners fail it on timing, not on code bugs.
+perf:
+    cargo test -p gpui-starter --lib infinite_canvas::perf -- --ignored --nocapture
+
 test-publish:
     cargo publish --workspace --dry-run --allow-dirty
+
+# Regenerate THIRD-PARTY-NOTICES: crate licenses via cargo-about over
+# Cargo.lock plus the assets/ license texts, every input SHA-256-stamped
+# so a review shows which licenses ship. Requires cargo-about 0.9.3
+# (cargo install cargo-about --version 0.9.3 --locked).
+notices:
+    ./scripts/notices.sh
 
 # Use local path checkout for gpui-query (for active development of gpui-query;
 # branch gpui-pre-0.6 there mirrors the default git rev).
@@ -66,7 +78,7 @@ gpui-query-status:
 #
 # CI runs on the FORK hmziqagent/gpui-starter (remote `fork`), tag-triggered:
 # pushing a v* tag fires .github/workflows/release.yml from the tagged commit.
-# publish-release uses softprops/action-gh-release@v2, which UPSERTS the GitHub
+# publish-release uses softprops/action-gh-release@v3, which UPSERTS the GitHub
 # Release (replaces assets, regenerates notes) — so a re-trigger updates the
 # already-published release in place; no manual release deletion required.
 # ---------------------------------------------------------------------------
@@ -131,3 +143,42 @@ watch-release runid='':
 # List recent Release runs on the fork.
 release-runs limit='8':
     gh run list -R {{release-repo}} --workflow={{release-workflow}} --limit {{limit}}
+
+# Build the .deb (bundled-libs layout via scripts/build-deb.sh). Requires
+# cargo-deb (`cargo install cargo-deb --locked`) and patchelf.
+deb:
+    ./scripts/build-deb.sh
+
+# Build the .rpm (bundled-libs layout via scripts/build-rpm.sh). Requires
+# cargo-generate-rpm (`cargo install cargo-generate-rpm --locked`) and patchelf.
+rpm:
+    ./scripts/build-rpm.sh
+
+# Build the AppImage (linuxdeploy over the tarball layout via
+# scripts/build-appimage.sh). Requires GPUI_UPDATE_MANIFEST_URL in the env
+# plus patchelf, curl, file, desktop-file-utils, and zsync (appimagetool
+# needs the last three).
+appimage:
+    ./scripts/build-appimage.sh
+
+# Build the local .flatpak bundle (scripts/build-flatpak.sh; flathub runtimes
+# install on first run). Requires flatpak, flatpak-builder, and
+# flatpak-cargo-generator (pipx install flatpak-cargo-generator).
+flatpak:
+    ./scripts/build-flatpak.sh
+
+# Build the portable Windows artifacts (bare .exe + .zip in target/release
+# via scripts/build-windows-portable.sh). Git Bash on a Windows host only
+# (GHA windows-2025 runner); needs GPUI_UPDATE_MANIFEST_URL in the env.
+win-portable:
+    ./scripts/build-windows-portable.sh
+
+# Build the Inno Setup setup .exe (scripts/build-windows-installer.sh) into
+# target/release. Git Bash on a Windows host with ISCC in PATH (preinstalled
+# on GHA windows-2025); run win-portable first, this recipe needs the exe.
+win-installer:
+    ./scripts/build-windows-installer.sh
+
+# Run the socket.io relay the Shared Canvas page connects to.
+collab-server:
+    cargo run -p collab-server

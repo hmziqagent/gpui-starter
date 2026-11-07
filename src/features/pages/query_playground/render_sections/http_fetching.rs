@@ -1,32 +1,19 @@
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, button::Button, h_flex};
 use gpui_kit::{prelude::*, *};
 
-use gpui_query::core::QueryStatus;
-
 use crate::accessibility::A11yExt as _;
 
-use super::super::ui_helpers::{chip, section_card, status_badge};
+use super::super::ui_helpers::{
+    chip, query_data, query_error, query_status, section_card, status_badge,
+};
 use super::super::{HttpFetchKind, QueryPlaygroundPage};
 
 impl QueryPlaygroundPage {
     pub(in super::super) fn render_http_fetching(&mut self, cx: &mut Context<Self>) -> Div {
-        let loading = self.http_query.as_ref().map_or(false, |(e, _)| {
-            e.read_with(cx, |r, _| r.status().is_loading())
-        });
-        let status = self
-            .http_query
-            .as_ref()
-            .map_or(QueryStatus::Idle, |(e, _)| {
-                e.read_with(cx, |r, _| r.status())
-            });
-        let result = self
-            .http_query
-            .as_ref()
-            .and_then(|(e, _)| e.read_with(cx, |r, _| r.data().cloned()));
-        let error = self
-            .http_query
-            .as_ref()
-            .and_then(|(e, _)| e.read_with(cx, |r, _| r.error().cloned()));
+        let status = query_status(self.http_query.as_ref(), cx);
+        let loading = status.is_loading();
+        let result = query_data(self.http_query.as_ref(), cx);
+        let error = query_error(self.http_query.as_ref(), cx);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -35,9 +22,9 @@ impl QueryPlaygroundPage {
         let danger = theme.danger;
 
         section_card(
-            "HTTP Fetching",
-            "Real network requests via reqwest (httpbin.org), bridged onto the tokio runtime. \
-             LatestWins cancels in-flight on a new click.",
+            "http-fetching",
+            &crate::i18n::localize("query_playground_http_fetching_title"),
+            &crate::i18n::localize("query_playground_http_fetching_description"),
             cx,
         )
         .child(
@@ -96,7 +83,7 @@ impl QueryPlaygroundPage {
                 .child(
                     Button::new("pg-http-reset")
                         .outline()
-                        .label("Reset")
+                        .label(crate::i18n::localize("query_playground_reset"))
                         .on_click(cx.listener(|this, _, _, cx| this.reset_http(cx))),
                 ),
         )
@@ -133,7 +120,10 @@ impl QueryPlaygroundPage {
                 el.child(
                     div()
                         .id("pg-http-body")
-                        .a11y(Role::Code, "Response body")
+                        .a11y(
+                            Role::Code,
+                            crate::i18n::localize("query_playground_response_body"),
+                        )
                         .mx_4()
                         .mb_4()
                         .p_3()
@@ -150,7 +140,10 @@ impl QueryPlaygroundPage {
             el.child(
                 div()
                     .id("pg-http-error")
-                    .a11y(Role::Paragraph, format!("error: {err}"))
+                    .a11y(
+                        Role::Paragraph,
+                        format!("{}: {err}", crate::i18n::localize("query_playground_error")),
+                    )
                     .a11y_live(accesskit::Live::Polite)
                     .mx_4()
                     .mb_4()

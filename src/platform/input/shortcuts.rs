@@ -1,6 +1,186 @@
 use gpui_kit::{App, BorrowAppContext as _, Global};
+use std::rc::Rc;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::{Mutex, OnceLock};
+
+gpui_kit::actions!(shortcuts, [ToggleQuickFloat]);
+
+const LOG: &str = "gpui_starter::shortcuts";
+
+/// Capability/stub reason on every platform without the OS-global backends.
+pub const UNSUPPORTED_REASON: &str = "OS-global hotkeys need the macOS or Windows backends; this platform has none (Wayland defines no protocol and the X11 backend is not built)";
+
+/// Registry ids for the accelerators the service routes. OS-global
+/// registration is macOS/Windows-only; ids also fire via the fallback chord.
+pub const LAUNCHER: &str = "launcher";
+pub const QUICK_FLOAT: &str = "quick_float";
+
+// Own modifier/key repr, not global_hotkey's: the registry core must stay
+// constructible on Linux and wasm, where that crate is not a dependency.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HotKeySpec {
+    pub alt: bool,
+    pub shift: bool,
+    pub key: AcceleratorKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AcceleratorKey {
+    Space,
+    D,
+}
+
+pub struct Accelerator {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub spec: HotKeySpec,
+}
+
+/// Every accelerator the service knows; registration and dispatch both
+/// resolve ids (and, per platform, crate hotkey ids) against this table.
+pub const ACCELERATORS: &[Accelerator] = &[
+    Accelerator {
+        id: LAUNCHER,
+        label: "Alt+Space",
+        spec: HotKeySpec {
+            alt: true,
+            shift: false,
+            key: AcceleratorKey::Space,
+        },
+    },
+    Accelerator {
+        id: QUICK_FLOAT,
+        label: "Alt+Shift+D",
+        spec: HotKeySpec {
+            alt: true,
+            shift: true,
+            key: AcceleratorKey::D,
+        },
+    },
+];
+
+pub fn accelerator(id: &str) -> Option<&'static Accelerator> {
+    ACCELERATORS.iter().find(|acc| acc.id == id)
+}
+
+fn accelerator_labels() -> String {
+    ACCELERATORS
+        .iter()
+        .map(|acc| acc.label)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RegistryError {
+    UnknownAccelerator,
+    DuplicateId,
+}
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegistryError::UnknownAccelerator => {
+                write!(f, "id is not in the accelerator table")
+            }
+            RegistryError::DuplicateId => write!(f, "accelerator already has a handler"),
+        }
+    }
+}
+
+type Handler = Rc<dyn Fn(&mut App)>;
+
+// All mutations and dispatch run on the app thread: OS events hop the
+// forwarder's flume channel first, so the table needs no lock.
+#[derive(Default)]
+struct HandlerRegistry {
+    entries: Vec<(&'static str, Handler)>,
+}
+
+impl HandlerRegistry {
+    fn register(&mut self, id: &'static str, handler: Handler) -> Result<(), RegistryError> {
+        if accelerator(id).is_none() {
+            return Err(RegistryError::UnknownAccelerator);
+        }
+        if self.entries.iter().any(|(known, _)| *known == id) {
+            return Err(RegistryError::DuplicateId);
+        }
+        self.entries.push((id, handler));
+        Ok(())
+    }
+
+    fn handler(&self, id: &str) -> Option<&Handler> {
+        self.entries
+            .iter()
+            .find(|(known, _)| *known == id)
+            .map(|(_, handler)| handler)
+    }
+}
+
+#[derive(Default)]
+struct DispatchTable(HandlerRegistry);
+
+impl Global for DispatchTable {}
+
+/// Wire the handler an accelerator fires (OS-global event or fallback
+/// KeyBinding — both converge here). Fails on unknown or already-routed ids.
+pub fn set_handler(
+    id: &'static str,
+    handler: impl Fn(&mut App) + 'static,
+    cx: &mut App,
+) -> Result<(), RegistryError> {
+    cx.update_default_global::<DispatchTable, _>(|table, _| table.0.register(id, Rc::new(handler)))
+}
+
+/// Fire an accelerator's handler; false (with a warn) when none is wired.
+/// Runs outside the dispatch-table lease, so a handler may register mid-fire.
+pub fn trigger(id: &str, cx: &mut App) -> bool {
+    tracing::info!(target: LOG, accelerator = id, "Accelerator fired");
+    let handler =
+        cx.update_default_global::<DispatchTable, _>(|table, _| table.0.handler(id).cloned());
+    match handler {
+        Some(handler) => {
+            handler(cx);
+            true
+        }
+        None => {
+            tracing::warn!(target: LOG, accelerator = id, "no handler registered for accelerator");
+            false
+        }
+    }
+}
+
+/// Map a global-hotkey crate event id to its accelerator and fire it.
+/// Called on the app thread from the hotkey forwarder's flume pump.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn dispatch_hotkey(hotkey_id: u32, cx: &mut App) {
+    let Some(acc) = ACCELERATORS
+        .iter()
+        .find(|acc| crate_hotkey(acc.spec).id() == hotkey_id)
+    else {
+        tracing::warn!(target: LOG, hotkey_id, "global hotkey event matched no known accelerator");
+        return;
+    };
+    trigger(acc.id, cx);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn crate_hotkey(spec: HotKeySpec) -> global_hotkey::hotkey::HotKey {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+
+    let mut mods = Modifiers::empty();
+    if spec.alt {
+        mods.insert(Modifiers::ALT);
+    }
+    if spec.shift {
+        mods.insert(Modifiers::SHIFT);
+    }
+    let key = match spec.key {
+        AcceleratorKey::Space => Code::Space,
+        AcceleratorKey::D => Code::KeyD,
+    };
+    HotKey::new(Some(mods), key)
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ShortcutState {
@@ -16,13 +196,8 @@ impl Global for ShortcutState {}
 static HOTKEY_MANAGER: OnceLock<Mutex<Option<global_hotkey::GlobalHotKeyManager>>> =
     OnceLock::new();
 
-#[cfg(target_os = "windows")]
-const LOG: &str = "gpui_starter::shortcuts";
-
-// On Windows the manager owns a hidden window created on the calling thread:
-// WM_HOTKEY dispatches only while that thread pumps messages and Drop
-// (DestroyWindow) must run on that same thread, so the manager's whole
-// lifecycle is confined to one worker thread.
+// On Windows the manager owns a hidden window: WM_HOTKEY dispatches only on
+// its creating thread, and Drop (DestroyWindow) must run there too.
 #[cfg(target_os = "windows")]
 static HOTKEY_WORKER: OnceLock<Mutex<Option<HotkeyWorker>>> = OnceLock::new();
 
@@ -38,41 +213,64 @@ pub fn initialize(cx: &mut App) {
     let state = ShortcutState {
         enabled,
         registered: false,
-        accelerator: "Alt+Space".to_string(),
+        accelerator: accelerator_labels(),
         last_error: None,
     };
     cx.set_global(state);
-    // macOS hotkey events are forwarded by tray.rs, which is macOS-only.
-    #[cfg(target_os = "windows")]
+    if let Err(err) = set_handler(
+        LAUNCHER,
+        crate::features::command_palette::open_launcher,
+        cx,
+    ) {
+        tracing::warn!(target: LOG, error = %err, "launcher shortcut handler registration failed");
+    }
+    // Spawned here, independent of tray.rs: its setup returns early when the
+    // icon fails to build, which would leave OS-registered hotkeys undispatched.
     spawn_hotkey_event_forwarder(cx);
     apply_enabled(enabled, cx);
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn initialize(cx: &mut App) {
+    let state = ShortcutState {
+        enabled: false,
+        registered: false,
+        accelerator: accelerator_labels(),
+        last_error: Some(UNSUPPORTED_REASON.to_string()),
+    };
+    set_capability(&state, cx);
+    cx.set_global(state);
+}
+
 #[cfg(target_os = "macos")]
 pub fn apply_enabled(enabled: bool, cx: &mut App) {
-    use global_hotkey::{
-        GlobalHotKeyManager,
-        hotkey::{Code, HotKey, Modifiers},
-    };
+    use global_hotkey::GlobalHotKeyManager;
 
     let mut state = snapshot(cx);
     state.enabled = enabled;
     state.registered = false;
     state.last_error = None;
 
+    // All-or-nothing: a partial failure drops the manager, which unregisters
+    // the accelerators that did register.
     let slot = HOTKEY_MANAGER.get_or_init(|| Mutex::new(None));
     if let Ok(mut manager_slot) = slot.lock() {
         *manager_slot = None;
         if enabled {
             match GlobalHotKeyManager::new() {
                 Ok(manager) => {
-                    let hotkey = HotKey::new(Some(Modifiers::ALT), Code::Space);
-                    match manager.register(hotkey) {
-                        Ok(()) => {
+                    let mut failures = None;
+                    for acc in ACCELERATORS {
+                        if let Err(err) = manager.register(crate_hotkey(acc.spec)) {
+                            failures = failures.or_else(|| Some(err.to_string()));
+                        }
+                    }
+                    match failures {
+                        None => {
                             *manager_slot = Some(manager);
                             state.registered = true;
                         }
-                        Err(err) => state.last_error = Some(err.to_string()),
+                        Some(err) => state.last_error = Some(err),
                     }
                 }
                 Err(err) => state.last_error = Some(err.to_string()),
@@ -109,23 +307,11 @@ pub fn apply_enabled(enabled: bool, cx: &mut App) {
     state.enabled = enabled;
     state.registered = false;
     state.last_error = if enabled {
-        Some("global shortcut service currently configured for macOS".to_string())
+        Some(UNSUPPORTED_REASON.to_string())
     } else {
         None
     };
     commit(state, cx);
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn initialize(cx: &mut App) {
-    let state = ShortcutState {
-        enabled: false,
-        registered: false,
-        accelerator: "Alt+Space".to_string(),
-        last_error: Some("global shortcut service currently configured for macOS".to_string()),
-    };
-    set_capability(&state, cx);
-    cx.set_global(state);
 }
 
 pub fn snapshot(cx: &App) -> ShortcutState {
@@ -164,11 +350,11 @@ pub fn shutdown(_cx: &mut App) {}
 
 // The drain thread parks on a blocking crossbeam recv and forwards over flume:
 // `AsyncApp` is `!Send`, so it cannot `cx.update` (same shape as tray.rs).
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn spawn_hotkey_event_forwarder(cx: &mut App) {
     use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 
-    let (tx, rx) = flume::unbounded::<()>();
+    let (tx, rx) = flume::unbounded::<u32>();
     let spawn_result = std::thread::Builder::new()
         .name("gpui-hotkey-events".into())
         .spawn(move || {
@@ -178,10 +364,9 @@ fn spawn_hotkey_event_forwarder(cx: &mut App) {
                     return;
                 };
                 // The crate emits Pressed and Released per press; forwarding
-                // both would trigger the launcher twice per tap.
+                // both would fire the accelerator twice per tap.
                 if event.state() == HotKeyState::Pressed {
-                    tracing::info!(target: LOG, source = "hotkey_alt_space", "Launcher trigger");
-                    let _ = tx.send(());
+                    let _ = tx.send(event.id());
                 }
             }
         });
@@ -197,10 +382,10 @@ fn spawn_hotkey_event_forwarder(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             // Parked until a hotkey fires — no periodic wake-ups.
-            if rx.recv_async().await.is_err() {
+            let Ok(hotkey_id) = rx.recv_async().await else {
                 break;
-            }
-            let _ = cx.update(crate::launcher::open_launcher);
+            };
+            let _ = cx.update(|cx| dispatch_hotkey(hotkey_id, cx));
         }
     })
     .detach();
@@ -229,10 +414,7 @@ fn stop_hotkey_worker() {
 
 #[cfg(target_os = "windows")]
 fn spawn_hotkey_worker() -> Result<(), String> {
-    use global_hotkey::{
-        GlobalHotKeyManager,
-        hotkey::{Code, HotKey, Modifiers},
-    };
+    use global_hotkey::GlobalHotKeyManager;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, MSG, TranslateMessage,
@@ -242,10 +424,21 @@ fn spawn_hotkey_worker() -> Result<(), String> {
     let join = std::thread::Builder::new()
         .name("gpui-global-hotkey".into())
         .spawn(move || {
-            let hotkey = HotKey::new(Some(Modifiers::ALT), Code::Space);
-            let manager = GlobalHotKeyManager::new()
-                .and_then(|manager| manager.register(hotkey).map(|_| manager));
-            match manager {
+            // Register every accelerator before reporting readiness; a failure
+            // drops the manager, unregistering the earlier ones.
+            let registered = GlobalHotKeyManager::new().and_then(|manager| {
+                let mut failure = None;
+                for acc in ACCELERATORS {
+                    if let Err(err) = manager.register(crate_hotkey(acc.spec)) {
+                        failure = failure.or_else(|| Some(err));
+                    }
+                }
+                match failure {
+                    None => Ok(manager),
+                    Some(err) => Err(err),
+                }
+            });
+            match registered {
                 Ok(manager) => {
                     let thread_id = unsafe { GetCurrentThreadId() };
                     let _ = ready_tx.send(Ok(thread_id));
@@ -257,7 +450,9 @@ fn spawn_hotkey_worker() -> Result<(), String> {
                             DispatchMessageW(&msg);
                         }
                     }
-                    let _ = manager.unregister(hotkey);
+                    for acc in ACCELERATORS {
+                        let _ = manager.unregister(crate_hotkey(acc.spec));
+                    }
                 }
                 Err(err) => {
                     let _ = ready_tx.send(Err(err.to_string()));
@@ -290,7 +485,7 @@ fn spawn_hotkey_worker() -> Result<(), String> {
 
 fn set_capability(state: &ShortcutState, cx: &mut App) {
     crate::capabilities::set(
-        "global_shortcuts",
+        crate::capabilities::Capability::GLOBAL_SHORTCUTS,
         crate::capabilities::CapabilityStatus {
             supported: cfg!(any(target_os = "macos", target_os = "windows")),
             enabled: state.registered,
@@ -307,7 +502,7 @@ fn set_capability(state: &ShortcutState, cx: &mut App) {
                             None
                         }
                     } else {
-                        Some("global shortcut service currently configured for macOS".into())
+                        Some(UNSUPPORTED_REASON.into())
                     }
                 }),
             last_error: state.last_error.clone().map(Into::into),
@@ -322,3 +517,7 @@ fn commit(state: ShortcutState, cx: &mut App) {
         *s = state;
     });
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "shortcuts.test.rs"]
+mod shortcuts_test;

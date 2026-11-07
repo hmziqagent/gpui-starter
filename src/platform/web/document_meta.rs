@@ -1,10 +1,11 @@
 //! Browser-tab tray equivalent: canvas favicon with unread/connectivity badge
 //! plus a `document.title` mirror, driven by the app globals.
 
+use std::cell::RefCell;
 use std::sync::Mutex;
 
 use gpui_kit::App;
-use wasm_bindgen::JsCast as _;
+use wasm_bindgen::{JsCast as _, prelude::Closure};
 
 use crate::{
     connectivity::{ConnectivitySnapshot, ConnectivityState},
@@ -23,7 +24,20 @@ const ICON_SIZE: u32 = 64;
 /// Last applied favicon inputs — skips canvas redraws on no-op updates.
 static LAST: Mutex<Option<(usize, ConnectivityState)>> = Mutex::new(None);
 
+/// Last applied title — skips document.title writes on no-op updates.
+static LAST_TITLE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Asset-source path of the embedded 64px branded PNG drawn as canvas base.
+const BASE_ICON_PATH: &str = "app-icon/hicolor/64x64/apps/gpui-starter.png";
+
+// HtmlImageElement is !Send, so unlike LAST it cannot live in a static
+// Mutex; thread-local storage matches the single JS thread.
+thread_local! {
+    static BASE_IMAGE: RefCell<Option<web_sys::HtmlImageElement>> = RefCell::new(None);
+}
+
 pub fn install(cx: &mut App) {
+    load_base_image(cx);
     update(cx);
     cx.observe_global::<NotificationInboxState>(|cx| update(cx))
         .detach();
@@ -33,15 +47,96 @@ pub fn install(cx: &mut App) {
         .detach();
 }
 
+/// Start the one-time branded-base load (embedded PNG -> blob URL -> image
+/// element); completion is async and lands via [`render_favicon`].
+fn load_base_image(cx: &App) {
+    if BASE_IMAGE.with(|cell| cell.borrow().is_some()) {
+        return;
+    }
+    let Some(window) = web_sys::window() else {
+        tracing::warn!(target: LOG, "no window; favicon base not loaded");
+        return;
+    };
+    let Some(document) = window.document() else {
+        tracing::warn!(target: LOG, "no document; favicon base not loaded");
+        return;
+    };
+    let Some(bytes) = cx.asset_source().load(BASE_ICON_PATH).ok().flatten() else {
+        tracing::warn!(target: LOG, "favicon base missing from asset source");
+        return;
+    };
+    let Ok(element) = document.create_element("img") else {
+        tracing::warn!(target: LOG, "img element creation failed");
+        return;
+    };
+    let Ok(image) = element.dyn_into::<web_sys::HtmlImageElement>() else {
+        tracing::warn!(target: LOG, "img element cast failed");
+        return;
+    };
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]));
+    let seq: &wasm_bindgen::JsValue = parts.as_ref();
+    let Ok(blob) = web_sys::Blob::new_with_u8_slice_sequence(seq) else {
+        tracing::warn!(target: LOG, "favicon base blob creation failed");
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        tracing::warn!(target: LOG, "favicon base object URL failed");
+        return;
+    };
+
+    let target: &web_sys::EventTarget = image.as_ref();
+    let loaded = image.clone();
+    let load_url = url.clone();
+    let on_load: Closure<dyn FnMut()> = Closure::new(move || {
+        let _ = web_sys::Url::revoke_object_url(&load_url);
+        let base = loaded.clone();
+        BASE_IMAGE.with(|cell| *cell.borrow_mut() = Some(base));
+        super::dispatch::dispatch(|cx| {
+            if let Ok(mut last) = LAST.lock() {
+                *last = None;
+            }
+            update(cx);
+        });
+    });
+    let fail_url = url.clone();
+    let on_error: Closure<dyn FnMut()> = Closure::new(move || {
+        let _ = web_sys::Url::revoke_object_url(&fail_url);
+        tracing::warn!(target: LOG, "favicon base image failed to load");
+    });
+    for (event, handler) in [("load", on_load), ("error", on_error)] {
+        let registered = target
+            .add_event_listener_with_callback(event, handler.as_ref().unchecked_ref())
+            .is_ok();
+        if registered {
+            // Leaked for the page lifetime, past the one-shot load event
+            // (see web::connectivity).
+            handler.forget();
+        } else {
+            tracing::warn!(target: LOG, event, "favicon base listener not installed");
+        }
+    }
+    image.set_src(&url);
+}
+
 /// Recompute title + favicon from the current globals and apply them.
 fn update(cx: &App) {
     let route_title = crate::app_state::config_handle(cx)
-        .map(|config| config.active_route.title())
-        .unwrap_or_else(|| AppRoute::default().title());
+        .map(|config| config.active_route.localized_title())
+        .unwrap_or_else(|| AppRoute::default().localized_title());
     let unread = crate::notifications::inbox::unread_count(cx);
     let state = crate::connectivity::snapshot(cx).state;
 
-    set_title(&compose_title(route_title, unread, &state));
+    let title = compose_title(&route_title, unread, &state);
+    let title_changed = match LAST_TITLE.lock().as_deref() {
+        Ok(Some(last)) => *last != title,
+        _ => true,
+    };
+    if title_changed {
+        set_title(&title);
+        if let Ok(mut last) = LAST_TITLE.lock() {
+            *last = Some(title);
+        }
+    }
 
     let changed = match LAST.lock().as_deref() {
         Ok(Some(last)) => *last != (unread, state.clone()),
@@ -65,8 +160,18 @@ fn compose_title(route_title: &str, unread: usize, state: &ConnectivityState) ->
         title.push_str(&format!(" ({unread})"));
     }
     match state {
-        ConnectivityState::Offline => title.push_str(" — Offline"),
-        ConnectivityState::CaptiveOrFiltered => title.push_str(" — Filtered"),
+        ConnectivityState::Offline => {
+            title.push_str(&format!(
+                " — {}",
+                crate::i18n::localize("tab_title_offline")
+            ));
+        }
+        ConnectivityState::CaptiveOrFiltered => {
+            title.push_str(&format!(
+                " — {}",
+                crate::i18n::localize("tab_title_filtered")
+            ));
+        }
         _ => {}
     }
     title
@@ -79,6 +184,9 @@ fn set_title(title: &str) {
 }
 
 fn render_favicon(unread: usize, state: &ConnectivityState) -> Option<String> {
+    // None until the branded base loads: the static icon <link> then keeps
+    // serving the tab instead of a synthetic canvas mark.
+    let image = BASE_IMAGE.with(|cell| cell.borrow().clone())?;
     let document = web_sys::window()?.document()?;
     let canvas: web_sys::HtmlCanvasElement =
         document.create_element("canvas").ok()?.dyn_into().ok()?;
@@ -87,9 +195,8 @@ fn render_favicon(unread: usize, state: &ConnectivityState) -> Option<String> {
     let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
     let size = f64::from(ICON_SIZE);
 
-    // Base square (app blue).
-    ctx.set_fill_style_str("#2563eb");
-    ctx.fill_rect(0.0, 0.0, size, size);
+    ctx.draw_image_with_html_image_element(&image, 0.0, 0.0)
+        .ok()?;
 
     // Connectivity dot, bottom-right, white ring for contrast on any tab bar.
     let dot = state_color(state);
@@ -106,7 +213,6 @@ fn render_favicon(unread: usize, state: &ConnectivityState) -> Option<String> {
     ctx.close_path();
     ctx.fill();
 
-    // Unread badge, top-right (red disc + white count).
     if unread > 0 {
         let (label, font) = if unread > 99 {
             ("99+".to_string(), "bold 13px sans-serif")

@@ -6,8 +6,7 @@ use gpui_kit::{prelude::*, *};
 use super::{ChatStreamSource, ChatTurn, Role as ChatRole};
 use crate::accessibility::A11yExt as _;
 
-/// The full-width U+258C (LEFT HALF BLOCK) cursor appended to a streaming
-/// assistant message.
+/// U+258C LEFT HALF BLOCK, appended to the assistant message while it streams.
 const STREAMING_CURSOR: char = '\u{258C}';
 
 /// Backend-agnostic: tokens arrive via [`Self::append_token`].
@@ -47,10 +46,10 @@ impl AiResponseView {
     /// Append a decoded token to the latest assistant turn. No-op if there is
     /// no assistant turn yet.
     pub fn append_token(&mut self, token: &str) {
-        if let Some(last) = self.turns.last_mut() {
-            if last.role == ChatRole::Assistant {
-                last.content.push_str(token);
-            }
+        if let Some(last) = self.turns.last_mut()
+            && last.role == ChatRole::Assistant
+        {
+            last.content.push_str(token);
         }
     }
 
@@ -120,7 +119,10 @@ impl AiResponseView {
                     .child(
                         div()
                             .id("ai-chat-error-card")
-                            .a11y(Role::Alert, format!("Error. {error}"))
+                            .a11y(
+                                Role::Alert,
+                                format!("{}. {error}", crate::i18n::localize("ai_chat_error")),
+                            )
                             .a11y_live(accesskit::Live::Polite)
                             .flex()
                             .flex_col()
@@ -135,7 +137,9 @@ impl AiResponseView {
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(danger)
-                                    .child(SharedString::from("Error")),
+                                    .child(SharedString::from(crate::i18n::localize(
+                                        "ai_chat_error",
+                                    ))),
                             )
                             .child(
                                 div()
@@ -150,7 +154,7 @@ impl AiResponseView {
 
         let mut messages = v_flex()
             .id("ai-chat-transcript")
-            .a11y(Role::List, "Chat transcript")
+            .a11y(Role::List, crate::i18n::localize("ai_chat_transcript"))
             .aria_orientation(Orientation::Vertical)
             .w_full()
             .p_4()
@@ -201,7 +205,10 @@ fn render_user_bubble(
 ) -> impl IntoElement {
     div()
         .id(("ai-chat-user", index))
-        .a11y(Role::ListItem, format!("You: {content}"))
+        .a11y(
+            Role::ListItem,
+            format!("{}: {content}", crate::i18n::localize("ai_chat_you")),
+        )
         .w_full()
         .flex()
         .justify_end()
@@ -231,21 +238,31 @@ fn render_assistant_message(
     let wrapper = div().id(("ai-chat-assistant", index));
 
     if content.is_empty() && streaming {
-        wrapper.a11y(Role::ListItem, "Assistant: thinking").child(
-            div()
-                .text_sm()
-                .italic()
-                .text_color(muted)
-                .child(SharedString::from("Thinking…")),
-        )
+        wrapper
+            .a11y(
+                Role::ListItem,
+                crate::i18n::localize("ai_chat_assistant_thinking"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .italic()
+                    .text_color(muted)
+                    .child(SharedString::from(crate::i18n::localize(
+                        "ai_chat_thinking",
+                    ))),
+            )
     } else {
         let display = if streaming {
-            format!("{}{}", content, STREAMING_CURSOR)
+            format!("{content}{STREAMING_CURSOR}")
         } else {
             content.to_string()
         };
         wrapper
-            .a11y(Role::ListItem, format!("Assistant: {content}"))
+            .a11y(
+                Role::ListItem,
+                format!("{}: {content}", crate::i18n::localize("ai_chat_assistant")),
+            )
             .child(markdown(SharedString::from(display)))
     }
 }
@@ -264,8 +281,7 @@ where
     S: ChatStreamSource,
     F: FnMut(&mut E, &str) + Send + 'static,
 {
-    let messages: Vec<ChatTurn> = view.turns().to_vec();
-    let stream = source.stream(&messages, cx);
+    let stream = source.stream(view.turns(), cx);
 
     let (producer, rx) = crate::services::streaming::spawn_token_stream(cx, stream);
 

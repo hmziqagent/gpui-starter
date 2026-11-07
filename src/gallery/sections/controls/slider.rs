@@ -16,18 +16,14 @@ use super::demo::{DemoToggle, demo_toolbar, section};
 
 pub struct SliderSection {
     slider1: Entity<SliderState>,
-    slider1_value: f32,
     slider1_released_value: f32,
     slider3: Entity<SliderState>,
     slider3_released_value: SliderValue,
     slider_hsl: [Entity<SliderState>; 4],
-    slider_hsl_value: Hsla,
     slider_logarithmic: Entity<SliderState>,
     slider_reverse: Entity<SliderState>,
     slider_duration: Entity<SliderState>,
-    duration_months: f32,
     slider_temperature: Entity<SliderState>,
-    temperature_kelvin: f32,
     disabled: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -37,7 +33,7 @@ impl SliderSection {
         cx.new(|cx| Self::new(window, cx))
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         let slider1 = cx.new(|_| {
             SliderState::new()
                 .min(-255.)
@@ -118,78 +114,33 @@ impl SliderSection {
                 .default_value(3600.)
         });
 
-        let mut _subscriptions = vec![
-            cx.subscribe(&slider1, |this, _, event: &SliderEvent, cx| match event {
-                SliderEvent::Change(value) => {
-                    this.slider1_value = value.start();
-                    cx.notify();
-                }
-                SliderEvent::Release(value) => {
+        // Only the release latches stay cached: a released-at readout cannot
+        // be derived from the live state. Everything else reads its entity.
+        let _subscriptions = vec![
+            cx.subscribe(&slider1, |this, _, event: &SliderEvent, cx| {
+                if let SliderEvent::Release(value) = event {
                     this.slider1_released_value = value.start();
                     cx.notify();
                 }
             }),
-            cx.subscribe(&slider3, |this, _, event: &SliderEvent, cx| match event {
-                SliderEvent::Change(_) => {}
-                SliderEvent::Release(value) => {
+            cx.subscribe(&slider3, |this, _, event: &SliderEvent, cx| {
+                if let SliderEvent::Release(value) = event {
                     this.slider3_released_value = *value;
-                    cx.notify();
-                }
-            }),
-            cx.subscribe_in(
-                &slider_duration,
-                window,
-                |this, slider, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Change(value) = event {
-                        let month = value.start();
-                        slider.update(cx, |slider, cx| slider.set_value(month, window, cx));
-                        this.duration_months = month;
-                        cx.notify();
-                    }
-                },
-            ),
-            cx.subscribe(&slider_temperature, |this, _, event: &SliderEvent, cx| {
-                if let SliderEvent::Change(value) = event {
-                    this.temperature_kelvin = value.start();
                     cx.notify();
                 }
             }),
         ];
 
-        _subscriptions.extend(slider_hsl.iter().map(|slider| {
-            cx.subscribe(slider, |this, _, event: &SliderEvent, cx| match event {
-                SliderEvent::Change(_) => {
-                    this.slider_hsl_value = hsla(
-                        this.slider_hsl[0].read(cx).value().start(),
-                        this.slider_hsl[1].read(cx).value().start(),
-                        this.slider_hsl[2].read(cx).value().start(),
-                        this.slider_hsl[3].read(cx).value().start(),
-                    );
-                    cx.notify();
-                }
-                SliderEvent::Release(_) => {}
-            })
-        }));
-
-        // Seeds the HSL readout so the swatch matches the initial slider values.
-        slider_hsl[0].update(cx, |slider, cx| {
-            cx.emit(SliderEvent::Change(slider.value()));
-        });
-
         Self {
-            slider1_value: 75.,
             slider1_released_value: 75.,
             slider1,
             slider3_released_value: (12.0, 45.0).into(),
             slider3,
             slider_hsl,
-            slider_hsl_value: red(),
             slider_logarithmic,
             slider_reverse,
             slider_duration,
-            duration_months: 5.,
             slider_temperature,
-            temperature_kelvin: 3600.,
             disabled: false,
             _subscriptions,
         }
@@ -198,7 +149,14 @@ impl SliderSection {
 
 impl Render for SliderSection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rgb = SharedString::from(self.slider_hsl_value.to_hex());
+        let slider1_value = zero_positive(self.slider1.read(cx).value().start());
+        let slider_hsl_value = hsla(
+            self.slider_hsl[0].read(cx).value().start(),
+            self.slider_hsl[1].read(cx).value().start(),
+            self.slider_hsl[2].read(cx).value().start(),
+            self.slider_hsl[3].read(cx).value().start(),
+        );
+        let rgb = SharedString::from(slider_hsl_value.to_hex());
         let neutral_temperature = if cx.theme().mode.is_dark() {
             cx.theme().foreground
         } else {
@@ -254,15 +212,22 @@ impl Render for SliderSection {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!("{}", self.slider1_value)),
+                                            .child(format!("{slider1_value}")),
                                     ),
                             )
-                            .child(Slider::new(&self.slider1).disabled(self.disabled))
+                            .child(
+                                Slider::new(&self.slider1)
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Output volume"),
+                            )
                             .child(
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!("Released at {}", self.slider1_released_value)),
+                                    .child(format!(
+                                        "Released at {}",
+                                        zero_positive(self.slider1_released_value)
+                                    )),
                             ),
                     ),
             )
@@ -292,7 +257,11 @@ impl Render for SliderSection {
                                             .child(format!("${}", self.slider3.read(cx).value())),
                                     ),
                             )
-                            .child(Slider::new(&self.slider3).disabled(self.disabled))
+                            .child(
+                                Slider::new(&self.slider3)
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Price range"),
+                            )
                             .child(
                                 div()
                                     .text_sm()
@@ -333,7 +302,8 @@ impl Render for SliderSection {
                                 Slider::new(&self.slider_reverse)
                                     .horizontal()
                                     .reverse()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Storage remaining"),
                             ),
                     ),
             )
@@ -359,14 +329,19 @@ impl Render for SliderSection {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!("{:.0}", self.duration_months)),
+                                            .child(format!(
+                                                "{:.0}",
+                                                self.slider_duration.read(cx).value().start()
+                                            )),
                                     ),
                             )
                             .child(
                                 v_flex()
                                     .px_4()
                                     .child(
-                                        Slider::new(&self.slider_duration).disabled(self.disabled),
+                                        Slider::new(&self.slider_duration)
+                                            .disabled(self.disabled)
+                                            .accessibility_label("Duration (months)"),
                                     )
                                     .child(div().relative().w_full().h(rems(2.125)).children(
                                         (0..=12).map(|month| {
@@ -424,7 +399,10 @@ impl Render for SliderSection {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!("{:.0} K", self.temperature_kelvin)),
+                                            .child(format!(
+                                                "{:.0} K",
+                                                self.slider_temperature.read(cx).value().start()
+                                            )),
                                     ),
                             )
                             .child(
@@ -464,7 +442,11 @@ impl Render for SliderSection {
                                             )),
                                     ),
                             )
-                            .child(Slider::new(&self.slider_temperature).disabled(self.disabled)),
+                            .child(
+                                Slider::new(&self.slider_temperature)
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Color temperature"),
+                            ),
                     ),
             )
             .child(
@@ -473,11 +455,7 @@ impl Render for SliderSection {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                h_flex()
-                                    .text_color(self.slider_hsl_value)
-                                    .child(rgb.clone()),
-                            )
+                            .child(h_flex().text_color(slider_hsl_value).child(rgb.clone()))
                             .child(Clipboard::new("slider-copy-hsl").value(rgb).on_copied(
                                 |_, window, cx| {
                                     window.push_notification("Color copied to clipboard.", cx)
@@ -496,13 +474,14 @@ impl Render for SliderSection {
                             .child(
                                 Slider::new(&self.slider_hsl[0])
                                     .vertical()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Hue"),
                             )
                             .child(
                                 v_flex()
                                     .items_center()
                                     .child("Hue")
-                                    .child(format!("{:.0}", self.slider_hsl_value.h * 360.)),
+                                    .child(format!("{:.0}", slider_hsl_value.h * 360.)),
                             ),
                     )
                     .child(
@@ -514,13 +493,14 @@ impl Render for SliderSection {
                             .child(
                                 Slider::new(&self.slider_hsl[1])
                                     .vertical()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Saturation"),
                             )
                             .child(
                                 v_flex()
                                     .items_center()
                                     .child("Saturation")
-                                    .child(format!("{:.0}", self.slider_hsl_value.s * 100.)),
+                                    .child(format!("{:.0}", slider_hsl_value.s * 100.)),
                             ),
                     )
                     .child(
@@ -532,13 +512,14 @@ impl Render for SliderSection {
                             .child(
                                 Slider::new(&self.slider_hsl[2])
                                     .vertical()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Lightness"),
                             )
                             .child(
                                 v_flex()
                                     .items_center()
                                     .child("Lightness")
-                                    .child(format!("{:.0}", self.slider_hsl_value.l * 100.)),
+                                    .child(format!("{:.0}", slider_hsl_value.l * 100.)),
                             ),
                     )
                     .child(
@@ -550,13 +531,14 @@ impl Render for SliderSection {
                             .child(
                                 Slider::new(&self.slider_hsl[3])
                                     .vertical()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Alpha"),
                             )
                             .child(
                                 v_flex()
                                     .items_center()
                                     .child("Alpha")
-                                    .child(format!("{:.0}", self.slider_hsl_value.a * 100.)),
+                                    .child(format!("{:.0}", slider_hsl_value.a * 100.)),
                             ),
                     ),
             )
@@ -582,11 +564,18 @@ impl Render for SliderSection {
                             .child(
                                 Slider::new(&self.slider_logarithmic)
                                     .horizontal()
-                                    .disabled(self.disabled),
+                                    .disabled(self.disabled)
+                                    .accessibility_label("Speed"),
                             ),
                     ),
             )
     }
+}
+
+/// Step snapping just below zero yields IEEE negative zero, whose Display is
+/// "-0"; fold it to +0 for the readouts.
+fn zero_positive(value: f32) -> f32 {
+    if value == 0. { 0. } else { value }
 }
 
 pub fn register(sections: &mut Vec<GallerySection>, window: &mut Window, cx: &mut App) {

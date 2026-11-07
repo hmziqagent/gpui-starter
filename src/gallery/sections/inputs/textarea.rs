@@ -17,7 +17,7 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 use crate::gallery::registry::GallerySection;
 
 use super::demo::{DemoToggle, demo_toolbar, section, size_dropdown};
-use super::tokens::TokenComposer;
+use super::tokens::{TokenComposer, TokenHover};
 
 const DEMO_TEXT: &str = "\
 Hello 世界，this is GPUI Kit.
@@ -60,6 +60,7 @@ struct ComposerAttachment {
 
 pub struct TextareaSection {
     tokens: Entity<TokenComposer>,
+    token_hover: Entity<TokenHover>,
     textarea: Entity<TextareaState>,
     textarea_auto_grow: Entity<TextareaState>,
     textarea_no_wrap: Entity<TextareaState>,
@@ -127,8 +128,10 @@ impl TextareaSection {
         let _subscriptions = vec![cx.subscribe_in(
             &chat_input,
             window,
-            |this: &mut Self, input, event, window, cx| match event {
-                InputEvent::PressEnter { shift, .. } if !shift => {
+            |this: &mut Self, input, event, window, cx| {
+                if let InputEvent::PressEnter { shift, .. } = event
+                    && !shift
+                {
                     let text = input.read(cx).value().trim().to_string();
                     if !text.is_empty() {
                         this.chat_messages.push(text);
@@ -138,12 +141,12 @@ impl TextareaSection {
                         cx.notify();
                     }
                 }
-                _ => {}
             },
         )];
 
         Self {
             tokens: TokenComposer::new("textarea", true, window, cx),
+            token_hover: TokenHover::new(true, window, cx),
             textarea,
             textarea_auto_grow,
             textarea_no_wrap,
@@ -334,12 +337,14 @@ impl Render for TextareaSection {
                                 Textarea::new(&self.composer)
                                     .with_size(size)
                                     .on_paste(move |item, _, cx| {
+                                        // Only the metadata is displayed, so the
+                                        // screenshot bytes are never cloned.
                                         let images: Vec<_> = item
                                             .entries()
                                             .iter()
                                             .filter_map(|entry| match entry {
                                                 ClipboardEntry::Image(image) => {
-                                                    Some(image.clone())
+                                                    Some((image.format, image.bytes.len()))
                                                 }
                                                 _ => None,
                                             })
@@ -348,16 +353,14 @@ impl Render for TextareaSection {
                                             return false;
                                         }
                                         view.update(cx, |this: &mut Self, cx| {
-                                            for image in images {
+                                            for (format, byte_len) in images {
                                                 let id = this.next_attachment_id;
                                                 this.next_attachment_id += 1;
                                                 this.attachments.push(ComposerAttachment {
                                                     id,
                                                     title: format!("pasted-image-{id}.png"),
                                                     detail: format!(
-                                                        "{:?} - {} bytes",
-                                                        image.format,
-                                                        image.bytes.len()
+                                                        "{format:?} - {byte_len} bytes"
                                                     ),
                                                 });
                                             }
@@ -372,10 +375,11 @@ impl Render for TextareaSection {
             .child(
                 section("textarea-tokens", "Atomic inline tokens")
                     .description(
-                        "References keep their identity through selection, deletion and undo. Copy returns the underlying text.",
+                        "References keep their identity through selection, deletion and undo. The plain field reports the token under the pointer.",
                     )
                     .w_full()
-                    .child(self.tokens.clone()),
+                    .child(self.tokens.clone())
+                    .child(self.token_hover.clone()),
             )
     }
 }

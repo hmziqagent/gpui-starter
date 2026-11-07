@@ -1,11 +1,5 @@
-//! The chat composer shared by the Input and Textarea sections, ported from
-//! the upstream `input_tokens` story. Commands, images, skills and people are
-//! inserted as atomic inline tokens; the application maps a token's ID back
-//! to the resource it names.
-//!
-//! The story crate builds one copy per host story; the gallery additionally
-//! namespaces every element ID with the host section's slug, because section
-//! IDs must stay unique across the whole gallery.
+//! Inline-token composer shared by the Input and Textarea sections (upstream
+//! `input_tokens` story). Element IDs carry the host slug to stay unique.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -14,16 +8,16 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     h_flex,
     input::{
-        InlineToken, InlineTokenClickEvent, InlineTokenContext, InlineTokenError, InputContent,
-        InputEvent, InputGroup, InputGroupAddon, InputGroupAddonAlignment as Align,
-        InputGroupButton, InputGroupInput, InputGroupTextarea, InputState, InputToken,
-        TextareaState,
+        InlineToken, InlineTokenClickEvent, InlineTokenContext, InlineTokenError,
+        InlineTokenHoverEvent, Input, InputContent, InputEvent, InputGroup, InputGroupAddon,
+        InputGroupAddonAlignment as Align, InputGroupButton, InputGroupInput, InputGroupTextarea,
+        InputState, InputToken, Textarea, TextareaState,
     },
     v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled, Window, div, prelude::FluentBuilder as _, rems,
+    Styled, Subscription, Window, div, prelude::FluentBuilder as _, rems,
 };
 
 /// What a token refers to, recovered from the prefix of its ID.
@@ -117,7 +111,7 @@ pub(crate) struct TokenComposer {
     readonly: bool,
     disabled: bool,
     status: SharedString,
-    _subscription: gpui_kit::Subscription,
+    _subscription: Subscription,
 }
 
 #[derive(Clone)]
@@ -192,10 +186,12 @@ impl TokenComposer {
             let start = input.selected_range().start;
             let text = input.value();
             if text[..start].ends_with(|c: char| !c.is_whitespace()) {
-                input.replace(" ", window, cx);
+                // insert() touches only the active cursor; replace() would
+                // delete every extra cursor's selection in a multiline field.
+                input.insert(" ", window, cx);
             }
             input.replace_with_token(reference.sample(), window, cx)?;
-            input.replace(" ", window, cx);
+            input.insert(" ", window, cx);
             input.focus(window, cx);
             Ok::<_, InlineTokenError>(())
         }));
@@ -386,5 +382,74 @@ impl Render for TokenComposer {
                     ),
             )
             .child(self.readout(cx))
+    }
+}
+
+pub(crate) struct TokenHover {
+    state: State,
+    status: SharedString,
+}
+
+impl TokenHover {
+    pub(crate) fn new(multiline: bool, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        cx.new(|cx| {
+            let (state, initial) = if multiline {
+                (
+                    State::Textarea(cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 4))),
+                    content(
+                        "Ping @alice about [Image 1] 🙂\nThen run /commit-pr with $gpui-kit \
+                         before standup.",
+                        &Reference::ALL,
+                    ),
+                )
+            } else {
+                (
+                    State::Input(cx.new(|cx| InputState::new(window, cx))),
+                    content(
+                        "Ping @alice about [Image 1] 🙂",
+                        &[Reference::Person, Reference::Image],
+                    ),
+                )
+            };
+            dispatch!(&state, |input| input
+                .update(cx, |input, cx| input.set_value(initial, window, cx)));
+            Self {
+                state,
+                status: SharedString::default(),
+            }
+        })
+    }
+
+    fn hover(&mut self, event: &InlineTokenHoverEvent, cx: &mut Context<Self>) {
+        self.status = if event.is_hovered() {
+            format!("Hovering {} ({})", event.token().text(), event.token().id()).into()
+        } else {
+            SharedString::default()
+        };
+        cx.notify();
+    }
+}
+
+impl Render for TokenHover {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let on_hover =
+            cx.listener(|this, event: &InlineTokenHoverEvent, _, cx| this.hover(event, cx));
+        let field = match &self.state {
+            State::Input(input) => Input::new(input)
+                .aria_label("Message")
+                .on_token_hover(on_hover)
+                .into_any_element(),
+            State::Textarea(input) => Textarea::new(input)
+                .aria_label("Message")
+                .on_token_hover(on_hover)
+                .into_any_element(),
+        };
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(field)
+            .when(!self.status.is_empty(), |this| {
+                this.child(div().text_sm().child(self.status.clone()))
+            })
     }
 }

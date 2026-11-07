@@ -61,12 +61,18 @@ impl EditorSection {
         let underline_range = "Underline";
         let fill_range = "marks a tracked range.";
         let frame_range = "outlines a tracked range.";
-        let marker_start = DECORATION_TEXT.find(marker).unwrap_or_default();
-        let color_start = DECORATION_TEXT.find(color_range).unwrap_or_default();
-        let italic_start = DECORATION_TEXT.find(italic_range).unwrap_or_default();
-        let underline_start = DECORATION_TEXT.find(underline_range).unwrap_or_default();
-        let fill_start = DECORATION_TEXT.find(fill_range).unwrap_or_default();
-        let frame_start = DECORATION_TEXT.find(frame_range).unwrap_or_default();
+        // A silent fallback to byte 0 would highlight the wrong ranges.
+        let find_start = |needle: &str| {
+            DECORATION_TEXT
+                .find(needle)
+                .expect("marker present in DECORATION_TEXT")
+        };
+        let marker_start = find_start(marker);
+        let color_start = find_start(color_range);
+        let italic_start = find_start(italic_range);
+        let underline_start = find_start(underline_range);
+        let fill_start = find_start(fill_range);
+        let frame_start = find_start(frame_range);
         let decorations = decorations_state.update(cx, |state, cx| {
             state.create_decorations_collection(
                 vec![
@@ -211,8 +217,9 @@ impl Render for EditorSection {
                     )
                     .child(self.render_toolbar(cx)),
             )
-            // No tree-sitter features are enabled, so no highlighter exists and
-            // fold arrows never appear; gutter, decorations, and font controls are unaffected.
+            // Native builds highlight via the kit's tree-sitter grammars; the
+            // wasm target compiles without them and renders plain. Gutter,
+            // decorations, and font controls are unaffected either way.
             .child(div().min_h_0().h(rems(30.)).child(if self.active_tab == 0 {
                 Editor::new(&self.editor_state)
                     .when_some(self.font_family.clone(), |this, family| {
@@ -239,7 +246,7 @@ pub fn register(sections: &mut Vec<GallerySection>, window: &mut Window, cx: &mu
     sections.push(GallerySection::new(
         "editor",
         "Editor",
-        "A code editor with gutter, readonly state, and font controls, plus a decorations tab showing styled text ranges and tracked fill and frame ranges. Syntax highlighting and folding need the crate's tree-sitter features, which this app does not enable, so the buffers render plain.",
+        "A code editor with gutter, readonly state, and font controls, plus a decorations tab showing styled text ranges and tracked fill and frame ranges. Syntax highlighting and folding come from the crate's tree-sitter grammars on native builds; the wasm target compiles without them and renders plain.",
         EditorSection::view(window, cx),
     ));
 }

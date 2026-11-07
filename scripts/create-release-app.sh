@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="GPUI Starter"
 BUNDLE_ID="com.gpui-starter.app"
 TARGET_DIR="$ROOT_DIR/target/release"
-# Args: <version> [universal|aarch64|x86_64]  (arch defaults to universal)
+# Args: <version> [universal|aarch64|x86_64|host-debug]  (arch defaults to universal)
 VERSION="${1:-}"
 ARCH="${2:-universal}"
 if [ -z "$VERSION" ]; then
@@ -17,22 +17,35 @@ BUILD_NUMBER="$(echo "$VERSION" | tr -d '.')"
 
 ARM_BIN="$ROOT_DIR/target/aarch64-apple-darwin/release/gpui-starter"
 X86_BIN="$ROOT_DIR/target/x86_64-apple-darwin/release/gpui-starter"
-for b in "$ARM_BIN" "$X86_BIN"; do
-  [ -f "$b" ] || { echo "Error: expected build output not found: $b" >&2; exit 1; }
-done
+DEBUG_BIN="$ROOT_DIR/target/debug/gpui-starter"
+ICON_SRC="$ROOT_DIR/assets/app-icon/gpui-starter.icns"
+if [ "$ARCH" = "host-debug" ]; then
+  [ -f "$DEBUG_BIN" ] || { echo "Error: expected build output not found: $DEBUG_BIN" >&2; exit 1; }
+else
+  for b in "$ARM_BIN" "$X86_BIN"; do
+    [ -f "$b" ] || { echo "Error: expected build output not found: $b" >&2; exit 1; }
+  done
+fi
+[ -f "$ICON_SRC" ] || { echo "Error: app icon not found: $ICON_SRC (generate it with scripts/gen-icons.sh)" >&2; exit 1; }
 
 # Stage each arch under its own dir so the three .app bundles don't collide;
 # the .app inside is always "GPUI Starter.app" (the name users see in the DMG).
 APP_DIR="$TARGET_DIR/dist/$ARCH/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+
+cp "$ICON_SRC" "$RESOURCES_DIR/gpui-starter.icns"
 
 # universal = fat Mach-O (arm64 + x86_64 slices, the default download); the
 # slim builds copy a single arch for users who want a smaller download.
 case "$ARCH" in
+  host-debug)
+    cp "$DEBUG_BIN" "$MACOS_DIR/$APP_NAME"
+    ;;
   universal)
     lipo -create "$ARM_BIN" "$X86_BIN" -output "$MACOS_DIR/$APP_NAME"
     ;;
@@ -43,7 +56,7 @@ case "$ARCH" in
     cp "$X86_BIN" "$MACOS_DIR/$APP_NAME"
     ;;
   *)
-    echo "Error: unknown arch '$ARCH' (expected universal|aarch64|x86_64)" >&2
+    echo "Error: unknown arch '$ARCH' (expected universal|aarch64|x86_64|host-debug)" >&2
     exit 1
     ;;
 esac
@@ -58,6 +71,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>en</string>
   <key>CFBundleExecutable</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>gpui-starter.icns</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
@@ -70,8 +85,12 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>10.14</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>GPUI Starter reads Bluetooth power state and paired devices to show system status.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Captures microphone audio to display the live input level and waveform.</string>
 </dict>
 </plist>
 PLIST

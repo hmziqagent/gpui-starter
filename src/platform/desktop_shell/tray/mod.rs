@@ -1,77 +1,67 @@
+use gpui_kit::App;
+
+use crate::capabilities::{self, Capability, CapabilityStatus};
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+// Shared skeleton: capability reporting, the leak, and the flume pump live
+// here; each OS module is only the tray/event/action seam.
 #[cfg(target_os = "macos")]
-pub use macos::setup;
+use macos as platform;
 #[cfg(target_os = "windows")]
-pub use windows::setup;
-
-#[cfg(test)]
-#[path = "tray.test.rs"]
-mod tray_test;
+use windows as platform;
 
 const LOG: &str = "gpui_starter::tray";
 
-// Magnifying-glass tray glyph drawn in code to avoid an asset; sized per
-// platform (36 for the macOS menu bar, 16 for the Windows tray at 100% DPI).
-pub(crate) fn icon(size: usize) -> tray_icon::Icon {
-    tray_icon::Icon::from_rgba(icon_pixels(size), size as u32, size as u32)
-        .expect("tray icon pixel buffer matches the requested dimensions by construction")
-}
+/// Tray entry point; call once from the bootstrap launch closure.
+pub fn setup(cx: &mut App) {
+    tracing::info!(target: LOG, "Setting up tray icon");
 
-pub(crate) fn icon_pixels(size: usize) -> Vec<u8> {
-    let mut px = vec![0u8; size * size * 4];
+    let tray = match platform::build_tray() {
+        Ok(tray) => tray,
+        Err(err) => {
+            tracing::error!(target: LOG, error = %err, "failed to create system tray icon");
+            capabilities::set(Capability::SYSTEM_TRAY, CapabilityStatus::error(err), cx);
+            return;
+        }
+    };
+    Box::leak(Box::new(tray));
+    tracing::debug!(target: LOG, "Tray icon created");
 
-    let cx = size as f32 * 0.42;
-    let cy = size as f32 * 0.42;
-    let r_outer = size as f32 * 0.30;
-    let r_inner = r_outer - 3.2;
-
-    let hx0 = cx + r_outer * 0.65;
-    let hy0 = cy + r_outer * 0.65;
-    let hx1 = size as f32 * 0.86;
-    let hy1 = size as f32 * 0.86;
-
-    for y in 0..size {
-        for x in 0..size {
-            let fx = x as f32 + 0.5;
-            let fy = y as f32 + 0.5;
-
-            let dx = fx - cx;
-            let dy = fy - cy;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let lens_a: f32 = if dist >= r_inner && dist <= r_outer {
-                1.0
-            } else if dist < r_inner {
-                ((dist - (r_inner - 1.0)) / 1.0).clamp(0.0, 1.0)
-            } else {
-                (1.0 - (dist - r_outer) / 1.0).clamp(0.0, 1.0)
-            };
-
-            let ex = hx1 - hx0;
-            let ey = hy1 - hy0;
-            let len2 = ex * ex + ey * ey;
-            let t = ((fx - hx0) * ex + (fy - hy0) * ey) / len2;
-            let t = t.clamp(0.0, 1.0);
-            let px2 = hx0 + t * ex;
-            let py2 = hy0 + t * ey;
-            let d_h = ((fx - px2) * (fx - px2) + (fy - py2) * (fy - py2)).sqrt();
-            let handle_a: f32 = if d_h <= 1.8 {
-                1.0
-            } else {
-                (1.0 - (d_h - 1.8) / 1.0).clamp(0.0, 1.0)
-            };
-
-            let a = (lens_a.max(handle_a) * 255.0) as u8;
-            let i = (y * size + x) * 4;
-            px[i] = 0;
-            px[i + 1] = 0;
-            px[i + 2] = 0;
-            px[i + 3] = a;
+    let (tx, rx) = flume::unbounded::<platform::TrayAction>();
+    match platform::spawn_event_drain(tx) {
+        Ok(()) => capabilities::set(
+            Capability::SYSTEM_TRAY,
+            CapabilityStatus::supported_enabled(),
+            cx,
+        ),
+        Err(err) => {
+            tracing::error!(
+                target: LOG,
+                error = %err,
+                "failed to spawn gpui-tray-events thread; tray events will not be delivered"
+            );
+            // The icon is live but no event will ever reach the app.
+            capabilities::set(Capability::SYSTEM_TRAY, CapabilityStatus::degraded(err), cx);
         }
     }
 
-    px
+    spawn_action_pump(rx, cx);
+}
+
+// Parked until a tray action fires — no periodic wake-ups. The drain thread
+// cannot cx.update (AsyncApp is !Send), so actions hop flume to this pump.
+fn spawn_action_pump(rx: flume::Receiver<platform::TrayAction>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            let Ok(action) = rx.recv_async().await else {
+                break;
+            };
+            let _ = cx.update(|cx| platform::apply_action(action, cx));
+        }
+    })
+    .detach();
 }

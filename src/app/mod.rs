@@ -9,13 +9,10 @@ pub mod reload;
 pub mod theme;
 pub mod window;
 
-// ---------------------------------------------------------------------------
-// Re-exports — preserve the public API
-// ---------------------------------------------------------------------------
-
+// Re-exports preserve the flat crate::app surface existing callers import from.
 pub use actions::{
-    About, ExecuteCommand, Languages, OpenDiagnostics, Quit, Restart, SelectFont, SelectLocale,
-    SelectRadius, SwitchTheme, SwitchThemeMode, ToggleSearch, TriggerTestPanic,
+    About, ExecuteCommand, OpenDiagnostics, Quit, Restart, SelectFont, SelectLocale, SelectRadius,
+    SwitchTheme, SwitchThemeMode, ToggleSearch, TriggerTestPanic,
 };
 
 #[cfg(not(target_family = "wasm"))]

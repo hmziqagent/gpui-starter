@@ -1,24 +1,11 @@
 //! End-to-end tests for navigation: sidebar page registration, deep-link
 //! route parsing, and view construction.
 
+use gpui_starter::page::Page;
 use gpui_starter::routes::AppRoute;
-use gpui_starter::sidebar::Page;
-
-// ---------------------------------------------------------------------------
-// Sidebar pages
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_sidebar_pages_exist() {
-    let all = Page::all();
-    // The app must expose exactly ten pages (nine feature pages + Gallery).
-    assert_eq!(
-        all.len(),
-        10,
-        "expected 10 sidebar pages, got {}",
-        all.len()
-    );
-
     // Every page variant that AppRoot::active_page_view matches on must be
     // present in the canonical list.
     let expected = [
@@ -31,7 +18,34 @@ fn test_sidebar_pages_exist() {
         Page::QueryDevToolsV2,
         Page::ErrorPlayground,
         Page::About,
+        Page::SystemControls,
+        Page::Gallery,
+        Page::CanvasShowcase,
+        Page::InfiniteCanvas,
+        Page::MultiuserCanvas,
+        Page::FloatingUi,
+        Page::ImageEditor,
+        Page::Microphone,
+        Page::Audio,
+        Page::Analytics,
+        Page::Music,
+        Page::SignIn,
+        Page::DesktopWidgets,
+        Page::Wgpu,
+        Page::ShaderCanvas,
+        Page::ModelViewer,
     ];
+
+    let all = Page::all();
+    // Length equality plus membership: dropping a variant from Page::all()
+    // cannot pass silently.
+    assert_eq!(
+        all.len(),
+        expected.len(),
+        "Page::all() has {} pages, expected {}",
+        all.len(),
+        expected.len()
+    );
 
     for page in &expected {
         assert!(
@@ -40,7 +54,6 @@ fn test_sidebar_pages_exist() {
         );
     }
 
-    // Each page must return a non-empty title.
     for page in all {
         assert!(
             !page.title().is_empty(),
@@ -49,13 +62,9 @@ fn test_sidebar_pages_exist() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Route parsing (deep links)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_route_parsing() {
-    // --- Top-level page routes -------------------------------------------
+    // Top-level page routes
     let cases = &[
         ("gpui-starter://home", AppRoute::Page(Page::Home)),
         ("gpui-starter://form", AppRoute::Page(Page::Form)),
@@ -69,10 +78,41 @@ fn test_route_parsing() {
             AppRoute::Page(Page::Diagnostics),
         ),
         ("gpui-starter://about", AppRoute::Page(Page::About)),
+        (
+            "gpui-starter://system-controls",
+            AppRoute::Page(Page::SystemControls),
+        ),
+        (
+            "gpui-starter://canvas-showcase",
+            AppRoute::Page(Page::CanvasShowcase),
+        ),
+        (
+            "gpui-starter://infinite-canvas",
+            AppRoute::Page(Page::InfiniteCanvas),
+        ),
+        (
+            "gpui-starter://multiuser-canvas",
+            AppRoute::Page(Page::MultiuserCanvas),
+        ),
+        (
+            "gpui-starter://floating-ui",
+            AppRoute::Page(Page::FloatingUi),
+        ),
+        ("gpui-starter://analytics", AppRoute::Page(Page::Analytics)),
+        ("gpui-starter://sign-in", AppRoute::Page(Page::SignIn)),
+        (
+            "gpui-starter://desktop-widgets",
+            AppRoute::Page(Page::DesktopWidgets),
+        ),
         // Sub-route
         (
             "gpui-starter://settings/notifications",
             AppRoute::SettingsNotifications,
+        ),
+        // Query parameters never select a route.
+        (
+            "gpui-starter://home?ref=test&source=menu",
+            AppRoute::Page(Page::Home),
         ),
     ];
 
@@ -85,7 +125,7 @@ fn test_route_parsing() {
         );
     }
 
-    // --- Round-trip: parse → to_url → parse ------------------------------
+    // Round-trip: parse → to_url → parse
     for (url, _expected) in cases {
         let route = AppRoute::parse_deep_link(url).unwrap();
         let serialized = route.to_url();
@@ -96,10 +136,12 @@ fn test_route_parsing() {
         );
     }
 
-    // --- Invalid inputs --------------------------------------------------
+    // Invalid inputs
     let bad = &[
         "https://example.com",
         "gpui-starter://missing-page",
+        "gpui-starter://home/extra",
+        "not-a-url-at-all",
         "gpui-starter://settings/..%2Fetc",
         "",
     ];
@@ -112,33 +154,23 @@ fn test_route_parsing() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// View construction
-// ---------------------------------------------------------------------------
-
 /// SettingsPage is exported with the expected constructor; full construction
 /// needs GPUI globals this test deliberately avoids.
 #[test]
-fn test_settings_page_loads() {
-    // Verify the route parses correctly.
+fn test_settings_page_route_and_constructor() {
     let route = AppRoute::parse_deep_link("gpui-starter://settings").unwrap();
     assert_eq!(route, AppRoute::Page(Page::Settings));
     assert_eq!(route.page_for_render(), Page::Settings);
 
-    // Compile-time check of the constructor signature only.
-    let _type_check: fn() = || {
-        fn _assert_settings_page_constructible() {
-            // Compile-time proof of the public constructor signature.
-            let _: fn(
-                &mut gpui_kit::Window,
-                &mut gpui_kit::Context<gpui_starter::views::SettingsPage>,
-            ) -> gpui_starter::views::SettingsPage = gpui_starter::views::SettingsPage::new;
-        }
-    };
+    let _: fn(
+        &mut gpui_kit::Window,
+        &mut gpui_kit::Context<gpui_starter::features::pages::SettingsPage>,
+    ) -> gpui_starter::features::pages::SettingsPage =
+        gpui_starter::features::pages::SettingsPage::new;
 }
 
 /// AboutPage is a zero-argument struct, instantiable without GPUI context.
 #[test]
 fn test_about_page_loads() {
-    let _page = gpui_starter::views::AboutPage::new();
+    let _page = gpui_starter::features::pages::AboutPage::new();
 }

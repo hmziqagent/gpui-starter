@@ -3,20 +3,49 @@ use gpui_kit::{prelude::*, *};
 
 use crate::accessibility::A11yExt as _;
 
-/// Build a test card with a colored left border (red = boundary, green = safe).
-/// Vertical card: appended children (action rows) flow under the header, so
-/// the text column never competes with fixed-width buttons for row width.
-pub(crate) fn test_card(title: &str, description: &str, boundary: bool, cx: &App) -> Stateful<Div> {
+/// Inline outcome of a playground action: the displayed text plus whether it
+/// should read as an error (the text itself is locale-dependent).
+#[derive(Clone, PartialEq)]
+pub(crate) struct ResultMsg {
+    pub(crate) text: String,
+    pub(crate) is_error: bool,
+}
+
+impl ResultMsg {
+    pub(crate) fn error(text: String) -> Self {
+        Self {
+            text,
+            is_error: true,
+        }
+    }
+
+    pub(crate) fn info(text: String) -> Self {
+        Self {
+            text,
+            is_error: false,
+        }
+    }
+}
+
+/// `id` keys the card (localized text would re-key it per locale). Actions sit
+/// under the header so text never competes with fixed-width buttons for width.
+pub(crate) fn test_card(
+    id: &str,
+    title: &str,
+    description: &str,
+    boundary: bool,
+    cx: &App,
+) -> Stateful<Div> {
     let theme = cx.theme();
     let accent = if boundary {
         theme.danger
     } else {
         theme.success
     };
-    let card_id: ElementId = ElementId::Name(SharedString::from(format!("ep-card-{title}")));
-    let title_id: ElementId = ElementId::Name(SharedString::from(format!("ep-card-title-{title}")));
+    let card_id: ElementId = ElementId::Name(SharedString::from(format!("ep-card-{id}")));
+    let title_id: ElementId = ElementId::Name(SharedString::from(format!("ep-card-title-{id}")));
     let description_id: ElementId =
-        ElementId::Name(SharedString::from(format!("ep-card-desc-{title}")));
+        ElementId::Name(SharedString::from(format!("ep-card-desc-{id}")));
     let title_text = SharedString::from(title.to_string());
     let description_text = SharedString::from(description.to_string());
 
@@ -29,10 +58,12 @@ pub(crate) fn test_card(title: &str, description: &str, boundary: bool, cx: &App
         .border_1()
         .border_color(theme.border)
         .child(
+            // Content masks clip square, so a full-height rail would poke past
+            // the rounded corners; insetting by the radius keeps it inside.
             div()
                 .absolute()
-                .top_0()
-                .bottom_0()
+                .top(theme.radius_lg)
+                .bottom(theme.radius_lg)
                 .left_0()
                 .w_1()
                 .bg(accent),
@@ -68,21 +99,15 @@ pub(crate) fn test_card(title: &str, description: &str, boundary: bool, cx: &App
         )
 }
 
-pub(crate) fn action_row(_cx: &App) -> Div {
+pub(crate) fn action_row() -> Div {
     h_flex().gap_2().flex_wrap().items_center().px_4().py_3()
 }
 
-/// Inline result text chip, keyed by `id` (the owning card's call-site key:
-/// the result text changes as an operation progresses and would re-key the
-/// chip mid-flight). Announced as a live region so async outcomes are spoken
-/// when they land.
-pub(crate) fn result_inline(id: &str, text: &str, cx: &App) -> Stateful<Div> {
+/// Inline result chip keyed by the owning card's `id`, since its text changes
+/// mid-operation; a live region, so async outcomes are spoken when they land.
+pub(crate) fn result_inline(id: &str, msg: &ResultMsg, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
-    let is_error = text.to_lowercase().contains("error")
-        || text.to_lowercase().contains("panic")
-        || text.to_lowercase().contains("timeout");
-
-    let color = if is_error {
+    let color = if msg.is_error {
         theme.danger
     } else {
         theme.muted_foreground
@@ -92,7 +117,7 @@ pub(crate) fn result_inline(id: &str, text: &str, cx: &App) -> Stateful<Div> {
         .id(ElementId::Name(SharedString::from(format!(
             "ep-result-{id}"
         ))))
-        .a11y(Role::Status, text.to_string())
+        .a11y(Role::Status, msg.text.clone())
         .a11y_live(accesskit::Live::Polite)
         .text_xs()
         .text_color(color)
@@ -102,5 +127,5 @@ pub(crate) fn result_inline(id: &str, text: &str, cx: &App) -> Stateful<Div> {
         .bg(theme.background)
         .border_1()
         .border_color(color)
-        .child(text.to_string())
+        .child(msg.text.clone())
 }

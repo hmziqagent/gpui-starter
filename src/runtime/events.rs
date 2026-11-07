@@ -18,6 +18,10 @@ pub enum AppEventKind {
         severity: crate::errors::AppErrorSeverity,
     },
     DiagnosticsChanged,
+    PaletteChanged {
+        palette: String,
+        value: String,
+    },
     Test {
         message: String,
     },
@@ -73,7 +77,7 @@ pub fn drain(cx: &mut App) -> Vec<AppEvent> {
     // re-fires observe_global callbacks whose drain() would loop forever.
     if cx
         .try_global::<AppEventQueue>()
-        .map_or(true, |q| q.0.is_empty())
+        .is_none_or(|q| q.0.is_empty())
     {
         return Vec::new();
     }

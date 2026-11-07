@@ -3,7 +3,14 @@ name: PR Builds
 # Runnable debug binaries as PR-check artifacts, so UI work (e.g. the
 # example gallery) can be tested from the Checks page without a local
 # cargo build. Quality gates stay in ci.yml; release distributions stay
-# in release.yml — this file only produces throwaway test builds.
+# in release.yml — this file only produces throwaway test builds. The
+# artifact feature embeds assets that debug rust-embed would otherwise
+# read from this runner's fs (missing on the download machine).
+#
+# Master pushes reuse the same lanes to keep the rust-cache lines warm AND
+# republish the rolling `latest` release (see publish-latest): one release,
+# stable asset names, replaced on every push so it always holds the newest
+# master build — whether that arrived as a merge or a direct commit.
 on:
   pull_request:
     branches: [master]
@@ -12,6 +19,12 @@ on:
   # master-only, exactly one warm line per lane).
   push:
     branches: [master]
+
+# contents:write covers the publish-latest release upsert; PR runs never
+# publish (every publish step is push-gated), and fork PR tokens are
+# read-only regardless.
+permissions:
+  contents: write
 
 # Cancel a superseded run when the same PR is pushed to again mid-build —
 # these lanes are long enough that stale runs are pure waste.
@@ -42,7 +55,8 @@ env:
 jobs:
   # ---------------------------------------------------------------------
   # Linux x86_64: raw binary + $ORIGIN/lib rpath + bundled non-system
-  # .so files (trimmed from the release.yml bundling step). Without the
+  # .so files, plus the desktop entry / icon / installer staging from
+  # the release.yml bundling step. Without the
   # rpath/bundle a Linux artifact fails to start on any machine lacking
   # the exact system libs — a test build that won't launch is worse than
   # none. Runners pinned to ubuntu-24.04 for the same reason as ci.yml
@@ -69,7 +83,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Build debug binary
-        run: cargo build
+        # --features artifact: the binary leaves this runner, and rust-embed
+        # only embeds at compile time in release or with debug-embed.
+        run: cargo build --features artifact
 
       - name: Relink rpath and bundle shared libraries
         run: |
@@ -90,12 +106,25 @@ jobs:
             esac
             [ -f "$STAGE/lib/$base" ] || cp -L "$lib" "$STAGE/lib/"
           done
+          cp resources/com.gpui-starter.app.desktop "$STAGE/" 2>/dev/null || true
+          cp -r assets/app-icon/hicolor "$STAGE/hicolor" 2>/dev/null || true
+          cp scripts/install-linux.sh "$STAGE/" 2>/dev/null || true
+          chmod +x "$STAGE/install-linux.sh" 2>/dev/null || true
           # GITHUB_SHA on a PR event is the merge commit, so this labels
           # exactly the combination the artifact was tested as.
           tar -czf "stage/gpui-starter-${GITHUB_SHA:0:12}-linux-x86_64-debug.tar.gz" -C stage gpui-starter
 
+      - name: Verify tarball contents
+        run: |
+          set -euo pipefail
+          TARBALL="stage/gpui-starter-${GITHUB_SHA:0:12}-linux-x86_64-debug.tar.gz"
+          LIST="$(tar -tzf "$TARBALL")"
+          echo "$LIST" | grep -qx 'gpui-starter/com.gpui-starter.app.desktop'
+          echo "$LIST" | grep -q '^gpui-starter/hicolor/48x48/apps/gpui-starter\.png$'
+          echo "$LIST" | grep -q '^gpui-starter/hicolor/512x512/apps/gpui-starter\.png$'
+          echo "$LIST" | grep -qx 'gpui-starter/install-linux.sh'
+
       - name: Upload Linux artifact
-        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: gpui-starter-linux-x86_64-debug
@@ -113,7 +142,7 @@ jobs:
           {
             echo "### Download this build"
             echo "Artifacts live on the run page, not on this job page: $RUN_URL"
-            echo "Artifact: gpui-starter-linux-x86_64-debug — tarball with the binary plus bundled libs; run ./gpui-starter/gpui-starter."
+            echo "Artifact: gpui-starter-linux-x86_64-debug — tarball with the binary, bundled libs, desktop entry, icons, and install-linux.sh; run ./gpui-starter/gpui-starter."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------
@@ -147,10 +176,23 @@ jobs:
           cache-directories: 'C:\t'
 
       - name: Build debug binary
-        run: cargo build
+        # --features artifact: the binary leaves this runner, and rust-embed
+        # only embeds at compile time in release or with debug-embed.
+        run: cargo build --features artifact
+
+      # The icon is embedded by build.rs for every Windows build; the AUMID
+      # shortcut is self-registered at app start (src/platform/toast_identity.rs),
+      # not assertable headless.
+      - name: Verify exe embeds an icon
+        shell: pwsh
+        run: |
+          $exe = [System.IO.File]::ReadAllBytes("C:\t\debug\gpui-starter.exe")
+          $text = [System.Text.Encoding]::GetEncoding(28591).GetString($exe)
+          if (-not $text.Contains([string][char]0 + [char]0 + [char]1 + [char]0)) {
+            throw "no ICONDIR signature - build.rs icon embed broken"
+          }
 
       - name: Upload Windows artifact
-        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: gpui-starter-windows-x64-debug
@@ -167,10 +209,10 @@ jobs:
           "Artifact: gpui-starter-windows-x64-debug - gpui-starter.exe (x64, debug; needs the VC++ runtime)." | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
   # ---------------------------------------------------------------------
-  # macOS (host arch, arm64 on macos-latest): plain binary, no .app
-  # bundle / codesign / DMG — those are release.yml's job. Ad-hoc
-  # signature is applied by the linker, so macOS Gatekeeper may still
-  # ask on first launch; right-click > Open accepts it for a test build.
+  # macOS (host arch, arm64 on macos-latest): a host-debug .app bundle
+  # from create-release-app.sh, ad-hoc signed and zipped with ditto. No
+  # DMG or notarization — release.yml's job. Ad-hoc signing means
+  # Gatekeeper asks on first launch; right-click > Open accepts it.
   # ---------------------------------------------------------------------
   build-macos:
     name: Build (macOS arm64)
@@ -189,14 +231,59 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Build debug binary
-        run: cargo build
+        # --features artifact: the binary leaves this runner, and rust-embed
+        # only embeds at compile time in release or with debug-embed.
+        run: cargo build --features artifact
+
+      # A bare binary has no NSBundle identifier, so the notifications
+      # backend refuses it (src/services/notifications/backend/user_notify.rs).
+      - name: Bundle debug .app and zip
+        run: |
+          set -euo pipefail
+          # ShortVersion must be the Cargo.toml semver (normalize-version.sh
+          # rejects anything that is not X.Y.Z); the commit hash identifies
+          # the build via CFBundleVersion, never the user-facing version.
+          APP_VERSION="$(./scripts/normalize-version.sh \
+            "$(grep -m1 '^version' Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')")"
+          APP="$(./scripts/create-release-app.sh "$APP_VERSION" host-debug)"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_SHA:0:12}" "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          mkdir -p stage
+          ditto -c -k --sequesterRsrc --keepParent "$APP" \
+            "stage/gpui-starter-macos-arm64-debug-app.zip"
+
+      - name: Verify bundled app (zip + identifier + plist)
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/appcheck && mkdir -p /tmp/appcheck
+          ZIP="stage/gpui-starter-macos-arm64-debug-app.zip"
+          # unzip -Z1 prints the bare entry list. Single-level zip: the
+          # executable sits directly under the app bundle and a nested .zip
+          # means the artifact was double-packed.
+          ZIP_LIST="$(unzip -Z1 "$ZIP")"
+          echo "$ZIP_LIST" | grep -qx 'GPUI Starter.app/Contents/MacOS/GPUI Starter'
+          if echo "$ZIP_LIST" | grep -q '\.zip$'; then
+            echo "Error: nested zip inside $ZIP" >&2
+            exit 1
+          fi
+          ditto -x -k --rsrc "$ZIP" /tmp/appcheck
+          APP="/tmp/appcheck/GPUI Starter.app"
+          PLIST="$APP/Contents/Info.plist"
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "com.gpui-starter.app" ]
+          # ShortVersion must be semver; the git hash belongs in CFBundleVersion only.
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST" \
+            | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'
+          [ -n "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")" ]
+          [ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$PLIST")" ]
+          [ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$PLIST")" ]
+          [ -f "$APP/Contents/Resources/gpui-starter.icns" ]
+          codesign --verify --deep --strict "$APP"
 
       - name: Upload macOS artifact
-        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: gpui-starter-macos-arm64-debug
-          path: target/debug/gpui-starter
+          name: gpui-starter-macos-arm64-debug-app
+          path: stage/gpui-starter-macos-arm64-debug-app.zip
           if-no-files-found: error
 
       - name: Link the artifact from this job's summary
@@ -207,5 +294,74 @@ jobs:
           {
             echo "### Download this build"
             echo "Artifacts live on the run page, not on this job page: $RUN_URL"
-            echo "Artifact: gpui-starter-macos-arm64-debug — bare arm64 binary (chmod +x before running; unsigned test build)."
+            echo "Artifact: gpui-starter-macos-arm64-debug-app — zip containing the ad-hoc signed GPUI Starter.app (arm64 debug). Unzip, right-click the app, Open."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Rolling `latest` release: every master push replaces the assets of the
+  # single `latest` release, so it always holds the newest master build
+  # (merge or direct commit — both land as pushes). Stable asset names are
+  # what make replacement work: softprops swaps same-named files, while a
+  # sha-per-file name would only accumulate. The tag moves to the built
+  # commit first, so the release always points at what it ships.
+  # ---------------------------------------------------------------------
+  publish-latest:
+    name: Publish latest builds
+    if: github.event_name == 'push'
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gpui-starter-*-debug*
+          merge-multiple: true
+          path: ./artifacts
+
+      - name: Stage stable-named release files
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp artifacts/gpui-starter-*-linux-x86_64-debug.tar.gz \
+            release/gpui-starter-linux-x86_64-debug.tar.gz
+          cp artifacts/gpui-starter.exe \
+            release/gpui-starter-windows-x64-debug.exe
+          [ -f artifacts/gpui-starter-macos-arm64-debug-app.zip ] \
+            || { echo "Error: mac zip not in ./artifacts (pattern mismatch?)" >&2; exit 1; }
+          cp artifacts/gpui-starter-macos-arm64-debug-app.zip \
+            release/gpui-starter-macos-arm64-debug-app.zip
+
+      - name: Move the latest tag to this build
+        run: |
+          # Runners have no git ident configured; tag creation hard-fails
+          # without one (release.yml sets the same identity for gh-pages).
+          git -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+            tag -fa latest -m "Rolling latest master build" "${GITHUB_SHA}"
+          git push -f origin "refs/tags/latest"
+
+      # action-gh-release overwrites same-named assets but never deletes
+      # names that fall out of files:, so the pre-bundle bare binary has to
+      # go by hand (a no-op once it is gone).
+      - name: Delete the stale mac bare-binary asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete-asset latest gpui-starter-macos-arm64-debug \
+            --repo "$GITHUB_REPOSITORY" --yes || true
+
+      - name: Upsert the latest release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: Latest master builds
+          prerelease: true
+          body: |
+            Rolling build of master @ ${{ github.sha }}.
+            Assets are replaced on every push to master — always the newest build.
+          files: |
+            release/gpui-starter-linux-x86_64-debug.tar.gz
+            release/gpui-starter-windows-x64-debug.exe
+            release/gpui-starter-macos-arm64-debug-app.zip

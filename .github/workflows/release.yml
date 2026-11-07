@@ -79,6 +79,10 @@ jobs:
           # collapse to "0.2.0" — otherwise we push a "vv0.2.0" tag and a
           # manifest whose version fails semver parsing client-side.
           VALUE="$(./scripts/normalize-version.sh "$RAW")"
+          # Asset filenames embed the Cargo.toml version; fail in seconds, not
+          # an hour later when SHA256SUMS misses a differently-named asset.
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$CARGO_VERSION" = "$VALUE" ] || { echo "Error: releasing $VALUE but Cargo.toml says $CARGO_VERSION" >&2; exit 1; }
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Build universal release binaries (arm64 + x86_64)
@@ -154,8 +158,14 @@ jobs:
             if [ -n "${APPLE_DEV_CERT_P12:-}" ]; then
               IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application}"
               codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP_PATH"
+              # codesign can fall back to ad-hoc without a clear error when
+              # the identity is missing; a cert was configured, so require it.
+              SIGNATURE_INFO="$(codesign -dv "$APP_PATH" 2>&1 || true)"
+              echo "$SIGNATURE_INFO" | grep -q '^Authority=Developer ID Application' \
+                || { echo "Error: $ARCH is not Developer ID signed though APPLE_DEV_CERT_P12 is configured" >&2; exit 1; }
             else
               codesign --force --deep --sign - "$APP_PATH"
+              echo "Note: no signing cert configured; $ARCH stays ad-hoc signed" >&2
             fi
             if [ "$ARCH" = "universal" ]; then
               DMG="target/release/GPUI-Starter-${VER}.dmg"
@@ -190,6 +200,37 @@ jobs:
             xcrun stapler staple "$DMG"
           done
 
+      - name: Verify DMG bundle (format + identifier + plist)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.value }}"
+          MNT="$(mktemp -d)/dmg"
+          mkdir -p "$MNT"   # hdiutil -mountpoint needs an existing dir
+          for DMG in \
+            "target/release/GPUI-Starter-${VER}.dmg" \
+            "target/release/GPUI-Starter-${VER}-aarch64.dmg" \
+            "target/release/GPUI-Starter-${VER}-x86_64.dmg"; do
+            # A raw Mach-O executable once shipped misnamed as .dmg; reject
+            # that case with a clear message, then gate on a real UDIF image.
+            FILE_DESC="$(file "$DMG")"
+            case "$FILE_DESC" in
+              *Mach-O*) echo "Error: $DMG is a Mach-O file, not a disk image: $FILE_DESC" >&2; exit 1 ;;
+            esac
+            hdiutil verify "$DMG" >/dev/null
+            hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG" >/dev/null
+            PLIST="$MNT/GPUI Starter.app/Contents/Info.plist"
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "com.gpui-starter.app" ]
+            # VER is validated X.Y.Z by normalize-version.sh, so this pins
+            # ShortVersion to a semver value; a git hash here fails the job.
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" = "$VER" ]
+            [ -n "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")" ]
+            [ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$PLIST")" ]
+            [ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$PLIST")" ]
+            [ -f "$MNT/GPUI Starter.app/Contents/Resources/gpui-starter.icns" ]
+            codesign --verify --deep --strict "$MNT/GPUI Starter.app"
+            hdiutil detach "$MNT" >/dev/null
+          done
+
       - name: Upload DMG artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -217,19 +258,33 @@ jobs:
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     env:
-      # Same discipline as build-macos / ci.yml.
+      # Same discipline as build-macos / ci.yml. No job-wide
+      # GPUI_UPDATE_MANIFEST_URL: the tarball binary below builds with the
+      # updater compiled out (the manifest carries no linux- entry, so a
+      # baked URL would offer updates that can never download — the deb/rpm
+      # precedent). Only the AppImage step opts back in.
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
       RUST_BACKTRACE: "1"
       RUSTC_WRAPPER: kache
-      GPUI_UPDATE_MANIFEST_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/manifest.json"
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         run: ./scripts/install-linux-deps.sh
+
+      - name: Install packaging tools and validate metadata
+        # Runs before the long build so a broken desktop/metainfo pair fails
+        # the job in seconds, not after the release compile. zsync +
+        # desktop-file-utils serve the AppImage step (file/curl ship on the
+        # runner image); appstream provides appstreamcli.
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y zsync desktop-file-utils appstream
+          desktop-file-validate resources/com.gpui-starter.app.desktop
+          appstreamcli validate --explain resources/com.gpui-starter.app.metainfo.xml
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -249,6 +304,10 @@ jobs:
             RAW="${GITHUB_REF_NAME}"
           fi
           VALUE="$(./scripts/normalize-version.sh "$RAW")"
+          # Asset filenames embed the Cargo.toml version; fail in seconds, not
+          # an hour later when SHA256SUMS misses a differently-named asset.
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$CARGO_VERSION" = "$VALUE" ] || { echo "Error: releasing $VALUE but Cargo.toml says $CARGO_VERSION" >&2; exit 1; }
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary
@@ -290,7 +349,7 @@ jobs:
           # .desktop ships INERT inside the tarball — install-linux.sh installs
           # them to the user's XDG dirs (run it once after extracting).
           cp resources/com.gpui-starter.app.desktop "$STAGE/" 2>/dev/null || true
-          cp resources/gpui-starter.png "$STAGE/" 2>/dev/null || true
+          cp -r assets/app-icon/hicolor "$STAGE/hicolor" 2>/dev/null || true
           cp scripts/install-linux.sh "$STAGE/" 2>/dev/null || true
           chmod +x "$STAGE/install-linux.sh" 2>/dev/null || true
 
@@ -317,6 +376,16 @@ jobs:
           echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "name=$TARBALL" >> "$GITHUB_OUTPUT"
 
+      - name: Verify tarball contents
+        run: |
+          set -euo pipefail
+          TARBALL="stage/${{ steps.tarball.outputs.path }}"
+          LIST="$(tar -tzf "$TARBALL")"
+          echo "$LIST" | grep -qx 'gpui-starter/com.gpui-starter.app.desktop'
+          echo "$LIST" | grep -q '^gpui-starter/hicolor/48x48/apps/gpui-starter\.png$'
+          echo "$LIST" | grep -q '^gpui-starter/hicolor/512x512/apps/gpui-starter\.png$'
+          echo "$LIST" | grep -qx 'gpui-starter/install-linux.sh'
+
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7
         with:
@@ -324,12 +393,259 @@ jobs:
           path: stage/${{ steps.tarball.outputs.path }}
           if-no-files-found: error
 
+      - name: Install cargo packaging tools
+        # Neither cargo-deb nor cargo-generate-rpm ships prebuilt Linux
+        # binaries, so every run pays a from-source install (~1-3 min each);
+        # the version pins keep the asset-map contract (verified against
+        # 3.8.0 / 0.21.0) from drifting with a floating latest.
+        run: |
+          cargo install cargo-deb --version 3.8.0 --locked
+          cargo install cargo-generate-rpm --version 0.21.0 --locked
+
+      - name: Build deb
+        # The filename embeds the Cargo.toml version (cargo-deb has no
+        # version override), so dispatch inputs must match it, same
+        # discipline as release tags.
+        run: env -u GPUI_UPDATE_MANIFEST_URL ./scripts/build-deb.sh
+
+      - name: Build rpm
+        run: env -u GPUI_UPDATE_MANIFEST_URL ./scripts/build-rpm.sh
+
+      - name: Build AppImage
+        # option_env!(GPUI_UPDATE_MANIFEST_URL) is dep-info tracked, so each
+        # URL flip forces a relink. Deb/rpm reuse the URL-out build above
+        # (the scripts also refuse a set URL); this step opts back in for the
+        # one build that keeps the in-app updater — exactly one flip.
+        env:
+          GPUI_UPDATE_MANIFEST_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/manifest.json"
+        run: ./scripts/build-appimage.sh "${{ steps.version.outputs.value }}"
+
+      - name: Upload AppImage artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          # Three files: .AppImage + .zsync (AppImageUpdate delta index) +
+          # .sha256 sidecar. Only the first two ship in the release.
+          name: gpui-starter-${{ steps.version.outputs.value }}-${{ matrix.arch }}-appimage
+          path: target/release/GPUI-Starter-${{ steps.version.outputs.value }}-${{ matrix.arch }}.AppImage*
+          if-no-files-found: error
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          # cargo-deb names it gpui-starter_<version>-1_<amd64|arm64>.deb.
+          name: gpui-starter-${{ steps.version.outputs.value }}-${{ matrix.arch }}-deb
+          path: target/debian/*.deb
+          if-no-files-found: error
+
+      - name: Upload rpm artifact
+        uses: actions/upload-artifact@v7
+        with:
+          # cargo-generate-rpm names it gpui-starter-<version>-1.<arch>.rpm.
+          name: gpui-starter-${{ steps.version.outputs.value }}-${{ matrix.arch }}-rpm
+          path: target/generate-rpm/*.rpm
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------
+  # Build the Windows artifacts: bare exe (the updater's swap target),
+  # portable zip, and the Inno Setup installer (ISCC 6.7.1 is preinstalled
+  # on windows-2025). The .sh packaging steps run under Git Bash
+  # (`shell: bash`); the cargo build keeps the default pwsh shell because
+  # Git Bash's link.exe shadows the MSVC linker (see the step note).
+  # -----------------------------------------------------------------------
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-2025
+    env:
+      # Same discipline as build-linux / ci.yml.
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+      RUST_BACKTRACE: "1"
+      RUSTC_WRAPPER: kache
+      # Same MAX_PATH fix as ci.yml check-windows/test-windows: the default
+      # C:\Users\runneradmin\.cargo prefix puts gpui-form's longest checkout
+      # path at 266 chars (MAX_PATH is 260); C:\cargo caps it at 247.
+      CARGO_HOME: 'C:\cargo'
+      GPUI_UPDATE_MANIFEST_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/manifest.json"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: kunobi-ninja/kache-action@v1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v2-windows-release"
+          shared-key: "release"
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+          else
+            RAW="${GITHUB_REF_NAME}"
+          fi
+          VALUE="$(./scripts/normalize-version.sh "$RAW")"
+          # Asset filenames embed the Cargo.toml version; fail in seconds, not
+          # an hour later when SHA256SUMS misses a differently-named asset.
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$CARGO_VERSION" = "$VALUE" ] || { echo "Error: releasing $VALUE but Cargo.toml says $CARGO_VERSION" >&2; exit 1; }
+          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+
+      # Default pwsh shell, never `shell: bash`, for any step that links:
+      # Git Bash's /usr/bin/link.exe (coreutils) shadows the MSVC linker and
+      # every link fails (ci.yml check-windows banner +
+      # scripts/windows-dev-env.sh). The bash packaging scripts re-run cargo
+      # build, but with this step done first that is a fresh cache hit (same
+      # job-level env -> identical fingerprints), so no linker ever runs
+      # inside bash.
+      - name: Build release binary (x86_64-pc-windows-msvc)
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Build portable artifacts (bare exe + zip)
+        shell: bash
+        run: ./scripts/build-windows-portable.sh "${{ steps.version.outputs.value }}"
+
+      - name: Verify installer AUMID source
+        shell: bash
+        run: |
+          grep -q 'AppUserModelID: "com.gpui-starter.app"' packaging/windows/gpui-starter.iss
+
+      - name: Verify portable zip embeds an icon
+        shell: pwsh
+        env:
+          VER: ${{ steps.version.outputs.value }}
+        run: |
+          $dst = "$env:RUNNER_TEMP/zipcheck"
+          Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
+          Expand-Archive -Path "target/release/GPUI-Starter-$env:VER-x86_64-windows.zip" -DestinationPath $dst
+          # ICONDIR signature scan; Latin1 round-trip keeps bytes 1:1 and the
+          # string search vectorized instead of a per-byte PowerShell loop.
+          $exe = [System.IO.File]::ReadAllBytes("$dst/gpui-starter.exe")
+          $text = [System.Text.Encoding]::GetEncoding(28591).GetString($exe)
+          if (-not $text.Contains([string][char]0 + [char]0 + [char]1 + [char]0)) {
+            throw "no ICONDIR signature in gpui-starter.exe - build.rs icon embed broken"
+          }
+
+      - name: Build Inno Setup installer
+        shell: bash
+        run: ./scripts/build-windows-installer.sh "${{ steps.version.outputs.value }}"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          # Bare exe + zip + setup exe, each with a .sha256 sidecar; only
+          # the three main files ship in the release.
+          name: gpui-starter-${{ steps.version.outputs.value }}-x86_64-windows
+          path: target/release/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64-windows*
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------
+  # Build the x86_64 .flatpak bundle in the flathub build container, which
+  # ships flatpak + flatpak-builder + a working bwrap and the freedesktop
+  # 25.08 SDK preinstalled; stock ubuntu runners cannot run bwrap sandbox
+  # builds reliably. x86_64 only for now: the ~2GB rust-stable extension
+  # installs per --user cache, and the aarch64 lane is a matrix duplicate
+  # (ubuntu-24.04-arm, Cryptomator precedent) once this lane proves out in
+  # a first CI run.
+  # -----------------------------------------------------------------------
+  build-flatpak:
+    name: Build Flatpak (x86_64)
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      # flatpak-builder's bwrap needs the privileges the image build itself
+      # needed (docker build --security=insecure); the job container must
+      # match.
+      options: --privileged
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install flatpak-cargo-generator
+        # Python-based image; --break-system-packages covers PEP 668
+        # externally-managed environments, the fallback covers older pip.
+        run: |
+          python3 -m pip install --break-system-packages flatpak-cargo-generator \
+            || python3 -m pip install flatpak-cargo-generator
+
+      - name: Restore flatpak user installation cache
+        # The 25.08 SDK is preinstalled system-wide in the image; the
+        # rust-stable extension and the --user SDK copy flatpak-builder
+        # resolves are per-run downloads (~2GB) without this cache.
+        uses: actions/cache@v4
+        with:
+          path: /root/.local/share/flatpak
+          key: flatpak-user-25.08-x86_64
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+          else
+            RAW="${GITHUB_REF_NAME}"
+          fi
+          VALUE="$(./scripts/normalize-version.sh "$RAW")"
+          # Asset filenames embed the Cargo.toml version; fail in seconds, not
+          # an hour later when SHA256SUMS misses a differently-named asset.
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$CARGO_VERSION" = "$VALUE" ] || { echo "Error: releasing $VALUE but Cargo.toml says $CARGO_VERSION" >&2; exit 1; }
+          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+
+      - name: Build flatpak bundle
+        # The script hard-fails when GPUI_UPDATE_MANIFEST_URL is set; env -u
+        # keeps that contract even if a job-level env ever appears here.
+        run: env -u GPUI_UPDATE_MANIFEST_URL ./scripts/build-flatpak.sh "${{ steps.version.outputs.value }}"
+
+      - name: Upload flatpak artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpui-starter-${{ steps.version.outputs.value }}-x86_64-flatpak
+          path: target/release/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64.flatpak
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------
+  # Gate on ci.yml for the tagged commit: without it the builds above can
+  # publish a release whose clippy/tests are red. Dispatch runs skip the
+  # gate (no tag to match a ci run to); they still fail fast on the
+  # version check.
+  # -----------------------------------------------------------------------
+  ci-passed:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    # ci.yml's test lane alone can need 60-100+ min after a Cargo.lock change.
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for ci on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=1" \
+              --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.id)"') || run="api error"
+            echo "ci for $GITHUB_SHA: $run"
+            # No event filter: a tag can point at a branch tip whose only ci
+            # run is the pull_request one for that same head SHA.
+            case "$run" in
+              "completed success "*) exit 0 ;;
+              completed*) echo "ci did not pass for $GITHUB_SHA — rerun it and re-tag" >&2; exit 1 ;;
+            esac
+            sleep 30
+          done
+
   # -----------------------------------------------------------------------
   # Create GitHub Release and publish the update manifest to gh-pages.
   # -----------------------------------------------------------------------
   publish-release:
     name: Publish Release
-    needs: [build-macos, build-linux]
+    needs: [build-macos, build-linux, build-windows, build-flatpak, ci-passed]
     runs-on: ubuntu-24.04
 
     steps:
@@ -347,6 +663,10 @@ jobs:
           # the build-macos / build-linux steps so every job agrees on the
           # version without duplicating the strip+validate logic.
           VALUE="$(./scripts/normalize-version.sh "$RAW")"
+          # Asset filenames embed the Cargo.toml version; fail in seconds, not
+          # an hour later when SHA256SUMS misses a differently-named asset.
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$CARGO_VERSION" = "$VALUE" ] || { echo "Error: releasing $VALUE but Cargo.toml says $CARGO_VERSION" >&2; exit 1; }
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Download DMG artifacts
@@ -356,13 +676,42 @@ jobs:
           name: macos-dmgs
           path: ./artifacts
 
-      - name: Download Linux artifacts
+      - name: Download packaging artifacts
         uses: actions/download-artifact@v8
         with:
-          # merge-multiple so both arches land flat in ./artifacts.
-          pattern: gpui-starter-${{ steps.version.outputs.value }}-*-linux
+          # Every packaging upload shares the gpui-starter-<ver>- prefix
+          # (tarballs, deb, rpm, AppImage, flatpak, windows);
+          # merge-multiple so all arches land flat in ./artifacts.
+          pattern: gpui-starter-${{ steps.version.outputs.value }}-*
           merge-multiple: true
           path: ./artifacts
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd artifacts
+          VER="${{ steps.version.outputs.value }}"
+          # Must mirror the release files list below exactly: sha256sum fails
+          # loudly on a missing asset (e.g. a deb/rpm filename that embedded
+          # a different Cargo.toml version) instead of shipping partial sums.
+          sha256sum \
+            "GPUI-Starter-${VER}.dmg" \
+            "GPUI-Starter-${VER}-aarch64.dmg" \
+            "GPUI-Starter-${VER}-x86_64.dmg" \
+            "gpui-starter-${VER}-x86_64-linux.tar.gz" \
+            "gpui-starter-${VER}-aarch64-linux.tar.gz" \
+            "gpui-starter_${VER}-1_amd64.deb" \
+            "gpui-starter_${VER}-1_arm64.deb" \
+            "gpui-starter-${VER}-1.x86_64.rpm" \
+            "gpui-starter-${VER}-1.aarch64.rpm" \
+            "GPUI-Starter-${VER}-x86_64.AppImage" \
+            "GPUI-Starter-${VER}-x86_64.AppImage.zsync" \
+            "GPUI-Starter-${VER}-aarch64.AppImage" \
+            "GPUI-Starter-${VER}-aarch64.AppImage.zsync" \
+            "GPUI-Starter-${VER}-x86_64.flatpak" \
+            "GPUI-Starter-${VER}-x86_64-windows.exe" \
+            "GPUI-Starter-${VER}-x86_64-windows.zip" \
+            "GPUI-Starter-${VER}-x86_64-windows-setup.exe" \
+            > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -376,6 +725,19 @@ jobs:
             ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64.dmg
             ./artifacts/gpui-starter-${{ steps.version.outputs.value }}-x86_64-linux.tar.gz
             ./artifacts/gpui-starter-${{ steps.version.outputs.value }}-aarch64-linux.tar.gz
+            ./artifacts/gpui-starter_${{ steps.version.outputs.value }}-1_amd64.deb
+            ./artifacts/gpui-starter_${{ steps.version.outputs.value }}-1_arm64.deb
+            ./artifacts/gpui-starter-${{ steps.version.outputs.value }}-1.x86_64.rpm
+            ./artifacts/gpui-starter-${{ steps.version.outputs.value }}-1.aarch64.rpm
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64.AppImage
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64.AppImage.zsync
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-aarch64.AppImage
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-aarch64.AppImage.zsync
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64.flatpak
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64-windows.exe
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64-windows.zip
+            ./artifacts/GPUI-Starter-${{ steps.version.outputs.value }}-x86_64-windows-setup.exe
+            ./artifacts/SHA256SUMS.txt
 
       - name: Generate and publish update manifest
         env:
@@ -385,9 +747,9 @@ jobs:
           GITHUB_REPO="${{ github.repository }}"
 
           # Install the Python signing dependency. ubuntu-24.04 does NOT ship
-          # the `cryptography` module, so without this Ed25519 signing silently
-          # no-ops (see scripts/generate-manifest.sh). Gated on the secret so
-          # non-signing runs are a no-op.
+          # the `cryptography` module, and generate-manifest.sh hard-fails on
+          # a set-but-unusable UPDATE_SIGNING_KEY. Gated on the secret so
+          # non-signing runs skip the install.
           if [ -n "${UPDATE_SIGNING_KEY:-}" ]; then
             python3 -m pip install --user --break-system-packages cryptography
           fi

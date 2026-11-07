@@ -1,6 +1,6 @@
 //! Message Scroller section, ported from the upstream `MessageScrollerStory`.
 
-use std::{rc::Rc, time::Duration};
+use std::time::Duration;
 
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
@@ -317,9 +317,22 @@ impl MessageScrollerSection {
     fn reset_stream(&mut self, cx: &mut Context<Self>) {
         self.streaming = false;
         self.stream_task = None;
+        let streamed = self
+            .stream_messages
+            .len()
+            .saturating_sub(INITIAL_STREAM_MESSAGE_COUNT);
         self.stream_messages.truncate(INITIAL_STREAM_MESSAGE_COUNT);
         self.stream_scroller.update(cx, |state, cx| {
-            state.reset(INITIAL_STREAM_MESSAGE_COUNT, cx)
+            if streamed > 0 {
+                // splice keeps the reading anchor; reset would yank to tail
+                _ = state.splice(
+                    INITIAL_STREAM_MESSAGE_COUNT..INITIAL_STREAM_MESSAGE_COUNT + streamed,
+                    0,
+                    cx,
+                );
+            } else {
+                state.reset(INITIAL_STREAM_MESSAGE_COUNT, cx);
+            }
         });
         cx.notify();
     }
@@ -435,14 +448,9 @@ impl MessageScrollerSection {
 
 impl Render for MessageScrollerSection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let messages = Rc::new(self.messages.clone());
-        let stream_messages = Rc::new(self.stream_messages.clone());
-        let history_messages = Rc::new(self.history_messages.clone());
-        let navigation_messages = Rc::new(self.preview_messages.clone());
-        let custom_messages = navigation_messages.clone();
-        let application_messages = navigation_messages.clone();
-        let empty_messages = Rc::new(self.empty_messages.clone());
-        let unread_index = self.unread_index;
+        // Row renderers read the entity at draw time, so no list is cloned
+        // per render and rows always reflect the current state.
+        let owner = cx.entity();
         let streaming = self.streaming;
         let stream_has_response = self.stream_messages.len() > INITIAL_STREAM_MESSAGE_COUNT;
         let custom_scrolled_up = self.custom_scroller.read(cx).is_scrolled_up();
@@ -451,9 +459,10 @@ impl Render for MessageScrollerSection {
         let status = {
             let state = self.scroller.read(cx);
             format!(
-                "Following tail: {} · Scrolled up: {}",
+                "Following tail: {} · Scrolled up: {} · Top row: {}",
                 state.is_following_tail(),
-                state.is_scrolled_up()
+                state.is_scrolled_up(),
+                state.logical_scroll_top().item_ix + 1
             )
         };
 
@@ -547,12 +556,19 @@ impl Render for MessageScrollerSection {
                                     MessageScroller::new(
                                         "message-scroller-demo",
                                         self.scroller.clone(),
-                                        move |index, _, _| {
-                                            let Some(message) = messages.get(index).cloned() else {
-                                                return div().into_any_element();
-                                            };
+                                        {
+                                            let owner = owner.clone();
+                                            move |index, _, cx| {
+                                                let view = owner.read(cx);
+                                                let Some(message) = view.messages.get(index) else {
+                                                    return div().into_any_element();
+                                                };
 
-                                            Self::render_message_row(message, index == unread_index)
+                                                Self::render_message_row(
+                                                    message.clone(),
+                                                    index == view.unread_index,
+                                                )
+                                            }
                                         },
                                     )
                                     .with_list_style(StyleRefinement::default().p_5())
@@ -637,12 +653,18 @@ impl Render for MessageScrollerSection {
                         MessageScroller::new(
                             "message-scroller-streaming",
                             self.stream_scroller.clone(),
-                            move |index, _, _| {
-                                stream_messages
-                                    .get(index)
-                                    .cloned()
-                                    .map(|message| Self::render_message_row(message, false))
-                                    .unwrap_or_else(|| div().into_any_element())
+                            {
+                                let owner = owner.clone();
+                                move |index, _, cx| {
+                                    owner
+                                        .read(cx)
+                                        .stream_messages
+                                        .get(index)
+                                        .map(|message| {
+                                            Self::render_message_row(message.clone(), false)
+                                        })
+                                        .unwrap_or_else(|| div().into_any_element())
+                                }
                             },
                         )
                         .with_list_style(StyleRefinement::default().p_4()),
@@ -694,12 +716,18 @@ impl Render for MessageScrollerSection {
                         MessageScroller::new(
                             "message-scroller-history",
                             self.history_scroller.clone(),
-                            move |index, _, _| {
-                                history_messages
-                                    .get(index)
-                                    .cloned()
-                                    .map(|message| Self::render_message_row(message, false))
-                                    .unwrap_or_else(|| div().into_any_element())
+                            {
+                                let owner = owner.clone();
+                                move |index, _, cx| {
+                                    owner
+                                        .read(cx)
+                                        .history_messages
+                                        .get(index)
+                                        .map(|message| {
+                                            Self::render_message_row(message.clone(), false)
+                                        })
+                                        .unwrap_or_else(|| div().into_any_element())
+                                }
                             },
                         )
                         .with_list_style(StyleRefinement::default().p_4()),
@@ -749,12 +777,18 @@ impl Render for MessageScrollerSection {
                         MessageScroller::new(
                             "message-scroller-navigation",
                             self.navigation_scroller.clone(),
-                            move |index, _, _| {
-                                navigation_messages
-                                    .get(index)
-                                    .cloned()
-                                    .map(|message| Self::render_message_row(message, false))
-                                    .unwrap_or_else(|| div().into_any_element())
+                            {
+                                let owner = owner.clone();
+                                move |index, _, cx| {
+                                    owner
+                                        .read(cx)
+                                        .preview_messages
+                                        .get(index)
+                                        .map(|message| {
+                                            Self::render_message_row(message.clone(), false)
+                                        })
+                                        .unwrap_or_else(|| div().into_any_element())
+                                }
                             },
                         )
                         .with_list_style(StyleRefinement::default().p_4()),
@@ -816,14 +850,21 @@ impl Render for MessageScrollerSection {
                                     MessageScroller::new(
                                         "message-scroller-empty",
                                         self.empty_scroller.clone(),
-                                        move |index, _, _| {
-                                            empty_messages
-                                                .get(index)
-                                                .cloned()
-                                                .map(|message| {
-                                                    Self::render_message_row(message, false)
-                                                })
-                                                .unwrap_or_else(|| div().into_any_element())
+                                        {
+                                            let owner = owner.clone();
+                                            move |index, _, cx| {
+                                                owner
+                                                    .read(cx)
+                                                    .empty_messages
+                                                    .get(index)
+                                                    .map(|message| {
+                                                        Self::render_message_row(
+                                                            message.clone(),
+                                                            false,
+                                                        )
+                                                    })
+                                                    .unwrap_or_else(|| div().into_any_element())
+                                            }
                                         },
                                     )
                                     .with_list_style(StyleRefinement::default().p_4())
@@ -869,12 +910,18 @@ impl Render for MessageScrollerSection {
                         MessageScroller::new(
                             "message-scroller-custom-control",
                             self.custom_scroller.clone(),
-                            move |index, _, _| {
-                                custom_messages
-                                    .get(index)
-                                    .cloned()
-                                    .map(|message| Self::render_message_row(message, false))
-                                    .unwrap_or_else(|| div().into_any_element())
+                            {
+                                let owner = owner.clone();
+                                move |index, _, cx| {
+                                    owner
+                                        .read(cx)
+                                        .preview_messages
+                                        .get(index)
+                                        .map(|message| {
+                                            Self::render_message_row(message.clone(), false)
+                                        })
+                                        .unwrap_or_else(|| div().into_any_element())
+                                }
                             },
                         )
                         .with_content_style(StyleRefinement::default().bg(cx.theme().background))
@@ -930,12 +977,16 @@ impl Render for MessageScrollerSection {
                     MessageScroller::new(
                         "message-scroller-application-controls",
                         self.application_scroller.clone(),
-                        move |index, _, _| {
-                            application_messages
-                                .get(index)
-                                .cloned()
-                                .map(|message| Self::render_message_row(message, false))
-                                .unwrap_or_else(|| div().into_any_element())
+                        {
+                            let owner = owner.clone();
+                            move |index, _, cx| {
+                                owner
+                                    .read(cx)
+                                    .preview_messages
+                                    .get(index)
+                                    .map(|message| Self::render_message_row(message.clone(), false))
+                                    .unwrap_or_else(|| div().into_any_element())
+                            }
                         },
                     )
                     .jump_button(false)

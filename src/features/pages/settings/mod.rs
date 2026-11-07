@@ -1,5 +1,7 @@
 mod dev_sections;
 mod notifications_section;
+pub(super) mod rows;
+mod session_section;
 
 use gpui_kit::component::{
     ActiveTheme as _, Selectable as _, Theme, ThemeMode, button::Button, label::Label,
@@ -44,9 +46,17 @@ impl SettingsPage {
                 this.notifications = notifications::snapshot(cx);
                 cx.notify();
             }),
+            cx.observe_global_in::<crate::services::auth_ui::AuthUiState>(window, |_, _, cx| {
+                cx.notify();
+            }),
+            // Config saves mutate AppState; the storage card's error banners
+            // must appear without leaving the page.
+            cx.observe_global::<app_state::AppState>(|_, cx| {
+                cx.notify();
+            }),
             cx.observe_global_in::<crate::events::AppEventQueue>(window, |this, _, cx| {
-                // Peek, never drain — AppRoot owns the drain. The observer
-                // fires per emit, so the id dedupe drops already-logged rows.
+                // Peek, never drain: AppRoot owns the drain. Registration order
+                // is load-bearing: this page is constructed before that observer.
                 let mut appended = false;
                 if let Some(queue) = cx.try_global::<crate::events::AppEventQueue>() {
                     for event in &queue.0 {
@@ -85,11 +95,9 @@ impl Render for SettingsPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.locale.clone();
         let is_dark = self.dark_mode;
-        let notifications_snapshot = self.notifications.clone();
-        let app_config = app_state::config(cx);
-        let title = crate::i18n::localize("settings_title", None);
-        let dark_mode_label = crate::i18n::localize("settings_dark_mode", None);
-        let language_label = crate::i18n::localize("settings_language", None);
+        let title = crate::i18n::localize("settings_title");
+        let dark_mode_label = crate::i18n::localize("settings_dark_mode");
+        let language_label = crate::i18n::localize("settings_language");
 
         v_flex()
             .min_h_full()
@@ -142,7 +150,7 @@ impl Render for SettingsPage {
                                     .outline()
                                     .selected(locale.as_ref() == LOCALE_EN)
                                     .toggled(locale.as_ref() == LOCALE_EN)
-                                    .label(crate::i18n::localize("settings_language_english", None))
+                                    .label(crate::i18n::localize("settings_language_english"))
                                     .on_click(|_, _, cx| {
                                         app::set_locale(LOCALE_EN, cx);
                                     }),
@@ -154,7 +162,6 @@ impl Render for SettingsPage {
                                     .toggled(locale.as_ref() == LOCALE_ZH_CN)
                                     .label(crate::i18n::localize(
                                         "settings_language_simplified_chinese",
-                                        None,
                                     ))
                                     .on_click(|_, _, cx| {
                                         app::set_locale(LOCALE_ZH_CN, cx);
@@ -162,13 +169,14 @@ impl Render for SettingsPage {
                             ),
                     ),
             )
+            .child(session_section::render_session_section(cx))
             .child(notifications_section::render_notifications_section(
-                &notifications_snapshot,
+                &self.notifications,
                 cx,
             ))
-            .child(dev_sections::render_shortcuts_section(&app_config, cx))
+            .child(dev_sections::render_shortcuts_section(cx))
             .child(dev_sections::render_storage_section(cx))
-            .child(dev_sections::render_developer_section(&app_config, cx))
+            .child(dev_sections::render_developer_section(cx))
             .child(dev_sections::render_desktop_actions_section(cx))
             .child(dev_sections::render_telemetry_section(cx))
             .child(dev_sections::render_telemetry_runtime_section(cx))

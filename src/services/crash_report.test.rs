@@ -1,5 +1,9 @@
-use super::*;
+use std::sync::{Arc, Mutex};
+
+use gpui_kit::TestAppContext;
 use tempfile::tempdir;
+
+use super::*;
 
 #[test]
 fn crash_report_new_populates_fields() {
@@ -64,6 +68,19 @@ fn snapshot_default_values() {
     assert!(snap.last_crash_timestamp.is_none());
     assert!(snap.upload_endpoint.is_empty());
     assert!(snap.last_upload_error.is_none());
+    assert!(!snap.upload_in_progress);
+}
+
+#[test]
+fn scrub_home_replaces_home_prefix() {
+    assert_eq!(
+        scrub_home_with("/home/me/logs/x.log", "/home/me"),
+        "~/logs/x.log"
+    );
+    // Replacement is textual, so a shared prefix without a path boundary is
+    // also rewritten — still scrubbed.
+    assert_eq!(scrub_home_with("/home/me2/x", "/home/me"), "~2/x");
+    assert_eq!(scrub_home_with("plain text", ""), "plain text");
 }
 
 #[test]
@@ -79,12 +96,14 @@ fn write_crash_report_creates_directory() {
 fn detect_pending_sorts_newest_first() {
     let dir = tempdir().expect("tempdir");
 
-    // Write two reports with a small delay so timestamps differ.
-    let r1 = CrashReport::new("first".into(), "bt".into(), false, vec![]);
-    write_crash_report(&r1, dir.path()).expect("write");
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    let r2 = CrashReport::new("second".into(), "bt".into(), false, vec![]);
-    write_crash_report(&r2, dir.path()).expect("write");
+    // Crafted stamps 50ms apart within one second pin the comparator without
+    // a wall-clock sleep.
+    let mut older = CrashReport::new("first".into(), "bt".into(), false, vec![]);
+    older.timestamp = rfc3339(1_700_000_000_000_000_000);
+    let mut newer = CrashReport::new("second".into(), "bt".into(), false, vec![]);
+    newer.timestamp = rfc3339(1_700_000_000_050_000_000);
+    write_crash_report(&older, dir.path()).expect("write older");
+    write_crash_report(&newer, dir.path()).expect("write newer");
 
     let detected = detect_pending_reports(dir.path());
     assert_eq!(detected.len(), 2);
@@ -123,4 +142,251 @@ fn new_caps_report_sizes() {
     assert_eq!(report.backtrace.chars().count(), 8192);
     assert_eq!(report.recent_errors.len(), 20);
     assert_eq!(report.recent_errors[0].chars().count(), 512);
+}
+
+#[test]
+fn rfc3339_pins_known_instants() {
+    assert_eq!(rfc3339(0), "1970-01-01T00:00:00.000000000+00:00");
+    assert_eq!(
+        rfc3339(1_000_000_000),
+        "1970-01-01T00:00:01.000000000+00:00"
+    );
+    assert_eq!(
+        rfc3339(951_825_600_000_000_000),
+        "2000-02-29T12:00:00.000000000+00:00",
+        "century leap day",
+    );
+    assert_eq!(
+        rfc3339(1_709_213_445_123_456_789),
+        "2024-02-29T13:30:45.123456789+00:00",
+        "leap day with nanoseconds",
+    );
+    assert_eq!(
+        rfc3339(1_793_145_599_999_999_999),
+        "2026-10-27T23:59:59.999999999+00:00",
+        "end of day",
+    );
+}
+
+#[test]
+fn report_ids_stay_unique_and_filename_safe() {
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..32 {
+        let report = CrashReport::new("m".into(), "bt".into(), false, vec![]);
+        assert!(
+            report
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            "id is used as a filename and must stay safe: {}",
+            report.id
+        );
+        assert!(
+            seen.insert(report.id.clone()),
+            "duplicate report id: {}",
+            report.id
+        );
+    }
+}
+
+#[test]
+fn hand_written_json_round_trips_through_the_serde_reader() {
+    let nasty = "quote \" backslash \\ newline \n tab \t control \u{1} unicode 日本語 slash /";
+    let report = CrashReport::new(
+        nasty.to_string(),
+        format!("bt {nasty}"),
+        true,
+        vec![nasty.to_string(), String::new()],
+    );
+    let dir = tempdir().expect("tempdir");
+    write_crash_report(&report, dir.path()).expect("write");
+
+    // The on-disk schema is whatever the serde reader accepts: readers and
+    // the storage/upload paths parse reports through CrashReport's derive.
+    let disk = std::fs::read_to_string(
+        dir.path()
+            .join("crash_reports")
+            .join(format!("{}.json", report.id)),
+    )
+    .expect("read written report");
+    let parsed: CrashReport = serde_json::from_str(&disk).expect("valid JSON, existing schema");
+    assert_eq!(parsed, report);
+
+    let detected = detect_pending_reports(dir.path());
+    assert_eq!(detected.len(), 1);
+    assert_eq!(detected[0], report);
+}
+
+#[test]
+fn timestamps_sort_lexicographically_in_write_order() {
+    let stamps: Vec<String> = (0..8)
+        .map(|i| {
+            let report =
+                CrashReport::new(format!("ordered-{i}").into(), "bt".into(), false, vec![]);
+            report.timestamp
+        })
+        .collect();
+    let mut sorted = stamps.clone();
+    sorted.sort();
+    assert_eq!(
+        stamps, sorted,
+        "fixed-width RFC3339 must sort the way detect_pending_reports sorts"
+    );
+}
+
+/// file -> detect -> persist -> mark uploaded: the startup ingest leg plus the
+/// uploader's storage steps, minus the network POST (no endpoint in tests).
+#[test]
+fn file_to_storage_to_uploaded_pipeline() {
+    use crate::storage::{StorageBackend as _, init_db};
+
+    let dir = tempdir().expect("tempdir");
+    let first = CrashReport::new("first panic".into(), "bt".into(), false, vec![]);
+    write_crash_report(&first, dir.path()).expect("write first");
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let second = CrashReport::new("second panic".into(), "bt".into(), false, vec![]);
+    write_crash_report(&second, dir.path()).expect("write second");
+
+    let db_path = dir.path().join("pipeline.db");
+    init_db(&db_path).expect("init db");
+    let backend = crate::storage::SqliteStorage::new_for_test(db_path);
+
+    tokio::runtime::Runtime::new()
+        .expect("tokio runtime for test")
+        .block_on(async {
+            for report in detect_pending_reports(dir.path()) {
+                backend
+                    .persist_crash_report(&report)
+                    .await
+                    .expect("persist ingested report");
+                let file = dir
+                    .path()
+                    .join("crash_reports")
+                    .join(format!("{}.json", report.id));
+                std::fs::remove_file(&file).expect("delete ingested file");
+            }
+
+            let pending = backend
+                .load_pending_crash_reports(PENDING_REPORT_BATCH)
+                .await
+                .expect("load pending");
+            assert_eq!(
+                pending.len(),
+                2,
+                "the pending count must cover the whole batch, not one row"
+            );
+            assert_eq!(pending[0].panic_message, "second panic", "newest first");
+
+            for report in &pending {
+                backend
+                    .mark_crash_report_uploaded(&report.id, "2026-01-01T00:00:00+00:00")
+                    .await
+                    .expect("mark uploaded");
+            }
+
+            let after = backend
+                .load_pending_crash_reports(PENDING_REPORT_BATCH)
+                .await
+                .expect("reload pending");
+            assert!(after.is_empty(), "uploaded rows leave the pending set");
+        });
+
+    assert!(
+        detect_pending_reports(dir.path()).is_empty(),
+        "ingested files are removed from disk"
+    );
+}
+
+/// Local 200-OK stand-in for the crash endpoint; records every request body.
+fn upload_sink(runtime: &Arc<tokio::runtime::Runtime>) -> (String, Arc<Mutex<Vec<String>>>) {
+    use tokio::io::AsyncWriteExt as _;
+
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("sink bind");
+    let port = std_listener.local_addr().expect("sink port").port();
+    std_listener
+        .set_nonblocking(true)
+        .expect("sink nonblocking");
+    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let sink = recorded.clone();
+    let _guard = runtime.enter();
+    let listener = tokio::net::TcpListener::from_std(std_listener).expect("tokio listener");
+    runtime.spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let Some(request) =
+                crate::services::auth_social::providers::fake_idp::read_request(&mut stream).await
+            else {
+                continue;
+            };
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(String::from_utf8_lossy(&request.body).into_owned());
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+    (format!("http://127.0.0.1:{port}/crash-reports"), recorded)
+}
+
+/// file -> persist -> upload through the real code: ingest_files stores and
+/// deletes the file, then the upload pass POSTs the stored row. The pipeline
+/// test above covers the storage steps; this one adds the network POST leg.
+#[gpui_kit::test]
+async fn run_upload_ingests_persists_and_posts_the_file(cx: &TestAppContext) {
+    // Real tokio/reqwest I/O completes off the deterministic scheduler's threads.
+    cx.executor().allow_parking();
+
+    let dir = tempdir().expect("tempdir");
+    let report = CrashReport::new("upload panic".into(), "bt".into(), false, vec![]);
+    write_crash_report(&report, dir.path()).expect("write report file");
+
+    let db_path = dir.path().join("upload.db");
+    crate::storage::init_db(&db_path).expect("init db");
+    let backend: Arc<dyn crate::storage::StorageBackend> =
+        Arc::new(crate::storage::SqliteStorage::new_for_test(db_path));
+
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("scratch runtime"),
+    );
+    let (endpoint, posted) = upload_sink(&runtime);
+
+    let outcome = run_upload(
+        cx.background_executor.clone(),
+        runtime.clone(),
+        backend,
+        reqwest::Client::new(),
+        endpoint,
+        dir.path().to_path_buf(),
+    )
+    .await;
+
+    assert!(
+        outcome.last_error.is_none(),
+        "a clean pass must not record an error: {:?}",
+        outcome.last_error
+    );
+    assert_eq!(
+        outcome.pending_count, 0,
+        "the uploaded row leaves the pending set"
+    );
+    assert!(
+        !dir.path()
+            .join("crash_reports")
+            .join(format!("{}.json", report.id))
+            .exists(),
+        "a persisted report file is deleted"
+    );
+    let posted = posted
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    assert_eq!(posted.len(), 1, "each stored report is POSTed once");
+    assert!(
+        posted[0].contains(&report.id),
+        "the POST body carries the stored report: {}",
+        posted[0]
+    );
 }

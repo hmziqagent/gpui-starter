@@ -15,7 +15,7 @@ use regex::Regex;
 use crate::gallery::registry::GallerySection;
 
 use super::demo::{DemoToggle, demo_toolbar, section, size_dropdown};
-use super::tokens::TokenComposer;
+use super::tokens::{TokenComposer, TokenHover};
 
 const DEMO_TEXT: &str = "Hello 世界，this is GPUI Kit, this is a long text.";
 
@@ -53,6 +53,7 @@ pub struct InputSection {
     color_input: Entity<InputState>,
     content_type_inputs: Vec<ContentTypeInput>,
     tokens: Entity<TokenComposer>,
+    token_hover: Entity<TokenHover>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -248,7 +249,7 @@ impl InputSection {
 
         // Typing in the plain field drives the disabled field, the story's
         // one visible demonstration of `set_value`.
-        let subscriptions = vec![
+        let _subscriptions = vec![
             cx.subscribe_in(&name_input, window, |this, state, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.greeting = format!("Hello, {}!", state.read(cx).value()).into();
@@ -297,7 +298,8 @@ impl InputSection {
             color_input,
             content_type_inputs,
             tokens: TokenComposer::new("input", false, window, cx),
-            _subscriptions: subscriptions,
+            token_hover: TokenHover::new(false, window, cx),
+            _subscriptions,
         }
     }
 
@@ -642,10 +644,11 @@ impl Render for InputSection {
             .child(
                 section("input-tokens", "Atomic inline tokens")
                     .description(
-                        "References keep their identity through selection, deletion and undo. Copy returns the underlying text.",
+                        "References keep their identity through selection, deletion and undo. The plain field reports the token under the pointer.",
                     )
                     .w_full()
-                    .child(self.tokens.clone()),
+                    .child(self.tokens.clone())
+                    .child(self.token_hover.clone()),
             )
     }
 }
@@ -658,3 +661,7 @@ pub fn register(sections: &mut Vec<GallerySection>, window: &mut Window, cx: &mu
         InputSection::view(window, cx),
     ));
 }
+
+#[cfg(test)]
+#[path = "input.test.rs"]
+mod input_test;

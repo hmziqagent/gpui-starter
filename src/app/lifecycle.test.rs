@@ -8,6 +8,7 @@ fn lifecycle_stage_starts_as_starting() {
 
 #[test]
 fn render_panic_flag_roundtrip() {
+    let _guard = hook_test_lock();
     // The flag is process-global; consume any stale value first so the
     // assertions below are deterministic even with parallel tests.
     let _ = take_render_panic();
@@ -45,18 +46,42 @@ fn crash_marker_roundtrip_in_data_dir() {
     let marker = test_data_dir().join("crash-marker");
     let _ = std::fs::remove_file(&marker);
 
+    #[cfg(target_family = "unix")]
+    {
+        // The write must replace a symlink planted on the marker path, never
+        // follow it into the target file.
+        let sentinel = test_data_dir().join("crash-marker.sentinel");
+        std::fs::write(&sentinel, "sentinel-payload").unwrap();
+        std::os::unix::fs::symlink(&sentinel, &marker).unwrap();
+    }
+
     write_crash_marker();
     #[cfg(target_family = "unix")]
     {
         use std::os::unix::fs::PermissionsExt as _;
+        let sentinel = test_data_dir().join("crash-marker.sentinel");
+        assert!(
+            !marker.symlink_metadata().unwrap().file_type().is_symlink(),
+            "planted symlink must be replaced by a regular marker file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "sentinel-payload",
+            "marker write must never follow a symlink on the path"
+        );
         let mode = std::fs::metadata(&marker).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "marker must stay user-only");
     }
+
+    // Each startup rewrites over the previous run's marker; unlink-first is
+    // what lets create_new succeed against it.
+    std::fs::write(&marker, "stale marker from a previous run").unwrap();
+    write_crash_marker();
     let contents = check_previous_crash();
     assert!(contents.is_some(), "marker should exist after write");
     assert!(
         contents.unwrap().starts_with("pid="),
-        "marker should start with pid="
+        "rewrite must replace the stale marker, not leave it in place"
     );
 
     remove_crash_marker();
@@ -72,4 +97,111 @@ fn test_data_dir() -> &'static PathBuf {
         set_app_data_dir(dir.clone());
         dir
     })
+}
+
+/// Handler tests flip process-global state; serialize them. Other modules'
+/// panics bypass this lock, so the writer tests retry around the bail window.
+static HOOK_TESTS: Mutex<()> = Mutex::new(());
+
+fn hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    HOOK_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn reports_containing(
+    dir: &std::path::Path,
+    needle: &str,
+) -> Vec<crate::services::crash_report::CrashReport> {
+    crate::services::crash_report::detect_pending_reports(dir)
+        .into_iter()
+        .filter(|report| report.panic_message.contains(needle))
+        .collect()
+}
+
+#[test]
+fn panic_handler_writes_valid_report_without_gpui() {
+    let _guard = hook_test_lock();
+    let dir = test_data_dir();
+    let _ = take_render_panic();
+
+    let needle = "gpui-less writer sentinel";
+    let mut written = reports_containing(dir, needle);
+    for _ in 0..5 {
+        if !written.is_empty() {
+            break;
+        }
+        handle_panic(needle, false);
+        written = reports_containing(dir, needle);
+    }
+
+    let report = written
+        .first()
+        .expect("handler must write a parseable report with no GPUI context");
+    assert!(
+        !report.render_path,
+        "non-render payload must not flag the boundary"
+    );
+    assert_eq!(report.app_version, env!("CARGO_PKG_VERSION"));
+    assert!(
+        !take_render_panic(),
+        "a non-render panic must not arm the error boundary"
+    );
+}
+
+#[test]
+fn nested_panic_handler_call_bails_and_writes_nothing() {
+    let _guard = hook_test_lock();
+    let dir = test_data_dir();
+
+    for attempt in 0..5 {
+        let needle = format!("re-entrancy sentinel {attempt}");
+        HANDLING_PANIC.store(true, Ordering::SeqCst);
+        handle_panic(&needle, false);
+        let still_set = HANDLING_PANIC.load(Ordering::SeqCst);
+        HANDLING_PANIC.store(false, Ordering::SeqCst);
+        let leaked = reports_containing(dir, &needle);
+        if still_set && leaked.is_empty() {
+            return; // bailed: nothing written, guard not cleared by the handler
+        }
+        // A concurrent handler cleared our flag; retry with a fresh needle.
+    }
+    panic!("nested handler call must bail without writing a report");
+}
+
+#[test]
+fn render_path_panic_sets_error_boundary_flag() {
+    let _guard = hook_test_lock();
+
+    for _ in 0..5 {
+        let _ = take_render_panic();
+        handle_panic("render-path sentinel", true);
+        if take_render_panic() {
+            return;
+        }
+    }
+    panic!("render-originating payload must arm the error boundary");
+}
+
+#[test]
+fn installed_hook_captures_panic_and_process_survives() {
+    let _guard = hook_test_lock();
+    let dir = test_data_dir();
+    install_panic_hook();
+
+    for attempt in 0..5 {
+        let needle = format!("capture-and-survive sentinel {attempt}");
+        let caught = std::panic::catch_unwind(|| {
+            panic!("{needle}");
+        });
+        assert!(
+            caught.is_err(),
+            "catch_unwind must capture; reaching this assert is the survive half"
+        );
+        if !reports_containing(dir, &needle).is_empty() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("installed hook must write a report for a captured panic");
 }

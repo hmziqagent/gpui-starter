@@ -14,6 +14,13 @@ cargo build
 cargo run
 ```
 
+To inspect the running UI's element tree, build with the devtools feature
+and press ctrl-alt-i (cmd-alt-i on macOS):
+
+```sh
+cargo run --features devtools
+```
+
 On macOS you can also build a signed `.app` bundle for local use:
 
 ```sh
@@ -80,6 +87,16 @@ scripts/windows-dev-env.sh --cargo-config
 cargo run
 ```
 
+## Downloads
+
+Every release publishes 18 assets: macOS DMGs (universal, aarch64, x86_64),
+Linux x86_64/aarch64 tarballs, `.deb`, `.rpm`, AppImage (plus `.zsync`), an
+x86_64 Flatpak bundle, Windows setup exe, portable zip, and bare exe, plus
+`SHA256SUMS.txt`. Get them from the [releases page](../../releases), or build
+a format locally with the `deb`, `rpm`, `appimage`, `flatpak`,
+`win-portable`, or `win-installer` justfile recipes. Per-format install
+one-liners and the full format matrix: [docs/releasing.md](docs/releasing.md).
+
 ## Features
 
 ### Core
@@ -116,7 +133,7 @@ cargo run
 
 ### Internationalization
 
-- Fluent translations via `es-fluent`
+- Translations via `rust-i18n` (`locales/*.yml` message catalogs), the same backend gpui-kit and gpui-form use
 - English (`en`) and Chinese Simplified (`zh-CN`) locales
 
 ### Developer Experience

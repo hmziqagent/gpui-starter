@@ -19,6 +19,11 @@ fn tray_click(button: MouseButton, state: MouseButtonState) -> TrayIconEvent {
 }
 
 #[test]
+fn branded_tray_icon_loads_from_the_embedded_set() {
+    assert!(branded_icon().is_ok());
+}
+
+#[test]
 fn menu_lists_show_settings_and_quit_with_a_separator_before_quit() {
     let items = menu_items();
     let ids: Vec<&str> = items
@@ -28,7 +33,10 @@ fn menu_lists_show_settings_and_quit_with_a_separator_before_quit() {
             MenuItemSpec::Separator => None,
         })
         .collect();
-    assert_eq!(ids, vec![SHOW_MENU_ID, SETTINGS_MENU_ID, QUIT_MENU_ID]);
+    assert_eq!(
+        ids,
+        vec![SHOW_MENU_ID, CHARTS_MENU_ID, SETTINGS_MENU_ID, QUIT_MENU_ID]
+    );
 
     assert!(matches!(items[items.len() - 2], MenuItemSpec::Separator));
     assert_eq!(
@@ -60,6 +68,10 @@ fn menu_id_mapping_is_exact() {
     assert!(matches!(
         action_for_menu_id(SHOW_MENU_ID),
         Some(TrayAction::ShowWindow)
+    ));
+    assert!(matches!(
+        action_for_menu_id(CHARTS_MENU_ID),
+        Some(TrayAction::OpenCharts)
     ));
     assert!(matches!(
         action_for_menu_id(SETTINGS_MENU_ID),

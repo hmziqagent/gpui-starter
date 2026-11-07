@@ -15,9 +15,10 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::app::keys::binding;
 use crate::gallery::registry::GallerySection;
 
-use super::demo::section;
+use crate::gallery::demo::section;
 
 actions!(
     gallery_menus_command,
@@ -232,7 +233,7 @@ fn with_entries(command: Command, entries: impl IntoIterator<Item = CommandEntry
         })
 }
 
-fn key_hint(keys: &[&str], label: &'static str) -> AnyElement {
+fn key_hint(keys: &[&'static str], label: &'static str) -> AnyElement {
     h_flex()
         .gap_1()
         .items_center()
@@ -263,27 +264,19 @@ const STOCKS: [Stock; 10] = [
 
 impl CommandSection {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        cx.bind_keys([
-            KeyBinding::new(&format!("{primary}-p"), OpenProfile, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-b"), OpenBilling, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-s"), OpenSettings, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-h"), GoHome, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-i"), OpenInbox, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(
-                &format!("{primary}-d"),
-                OpenDocuments,
-                Some(COMMAND_CONTEXT),
-            ),
-            KeyBinding::new(&format!("{primary}-f"), OpenFolders, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-n"), NewFile, Some(COMMAND_CONTEXT)),
-            KeyBinding::new(&format!("{primary}-c"), CopyItem, Some(COMMAND_CONTEXT)),
+        let bindings = [
+            binding("secondary-p", OpenProfile, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-b", OpenBilling, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-s", OpenSettings, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-h", GoHome, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-i", OpenInbox, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-d", OpenDocuments, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-f", OpenFolders, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-n", NewFile, Some(COMMAND_CONTEXT), cx),
+            binding("secondary-c", CopyItem, Some(COMMAND_CONTEXT), cx),
             KeyBinding::new("backspace", DeleteItem, Some(COMMAND_CONTEXT)),
-        ]);
+        ];
+        cx.bind_keys(bindings);
 
         let inline = cx.new(|cx| CommandState::new(window, cx));
         let dialog = cx.new(|cx| CommandState::new(window, cx));
@@ -354,16 +347,17 @@ impl CommandSection {
                             search.read(cx).focus_handle(cx).focus(window, cx);
                         });
                     }
+                    // Command consumes its entries when rendered, so each
+                    // dialog redraw needs a fresh clone of the owner's rows.
                     let entries = story
-                        .read_with(cx, |story, _| {
-                            stock_entries_for_render(&story.stock_entries)
-                        })
+                        .read_with(cx, |story, _| story.stock_entries.clone())
                         .unwrap_or_default();
                     let query_owner = story.clone();
                     let confirm_owner = story.clone();
                     content.child(with_entries(
                         Command::new(&search)
                             .bordered(false)
+                            .filterable(false)
                             .placeholder("Search stocks…")
                             .empty(|_, _, cx| {
                                 v_flex()
@@ -376,8 +370,10 @@ impl CommandSection {
                                     .child(Icon::new(IconName::Search).size_8())
                                     .child("No stock found.")
                             })
-                            .min_h(rems(20.))
-                            .max_h(rems(20.))
+                            // Command::max_h is inherent and caps the list,
+                            // not this frame; a fixed frame height is what
+                            // keeps the dialog from jumping as results arrive.
+                            .h(rems(20.))
                             .on_query(move |query, window, cx| {
                                 _ = query_owner.update(cx, |story, cx| {
                                     story.on_stock_query(query, window, cx);
@@ -484,12 +480,6 @@ fn popular_entries() -> Vec<CommandEntry> {
             .items(STOCKS.iter().take(5).map(|stock| stock_item(*stock)))
             .into(),
     ]
-}
-
-/// `Command` consumes its entries when rendered. Rebuild the stock rows from
-/// the owner-held result identities so a dialog redraw never drains the owner.
-fn stock_entries_for_render(entries: &[CommandEntry]) -> Vec<CommandEntry> {
-    entries.to_vec()
 }
 
 /// A two-line search result: symbol and name on the left, quote on the right.
@@ -696,8 +686,8 @@ impl Render for CommandSection {
             .child(
                 section("command-search-panel-box", "Search panel")
                     .description(
-                        "A palette used as a search panel whose custom filter checks symbols \
-                         before company names; try \"a\", \"hk\", or \"tesla\".",
+                        "A palette used as a search panel whose async source answers the query \
+                         itself; try \"a\", \"hk\", or \"tesla\".",
                     )
                     .child(
                         Button::new("command-search-stocks")

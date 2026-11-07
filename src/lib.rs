@@ -1,5 +1,6 @@
-// No recursion_limit override: the old 8192 value only papered over a #[test] ->
-// gpui::test glob-shadow stack overflow, which is fixed at its call sites.
+// Auto-trait analysis of wgpu 29's type graph exceeds the default 128 on
+// nightly (rust-lang/rust#159228); 256 suffices, the old 8192 masked real bugs.
+#![recursion_limit = "256"]
 #![allow(
     clippy::map_unwrap_or,
     clippy::let_unit_value,
@@ -21,6 +22,10 @@
     clippy::redundant_closure_call
 )]
 
+// Must stay at the crate root: rust_i18n::t! (also emitted inside gpui-form
+// derive output) resolves crate::_rust_i18n_t! relative to this module.
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod app;
 pub mod features;
 pub mod foundation;
@@ -32,13 +37,9 @@ pub mod services;
 pub mod shell;
 pub mod state;
 pub mod ui;
-// Entry points: shared cfg-neutral `bootstrap` (used by src/main.rs) plus the
-// wasm-only `#[wasm_bindgen(start)]` entry. See src/web.rs.
 pub mod web;
 
 pub use app::lifecycle;
-pub use features::command_palette as launcher;
-pub use features::pages as views;
 pub use foundation::{errors, ids, time};
 // SQLite migrations are native-only (no rusqlite on wasm).
 #[cfg(not(target_family = "wasm"))]
@@ -50,12 +51,13 @@ pub use platform::input::shortcuts;
 pub use platform::ipc;
 pub use platform::process::single_instance;
 pub use runtime::{capabilities, events};
+#[cfg(not(target_family = "wasm"))]
+pub use services::auth_social;
 pub use services::{
-    accessibility, commands, connectivity, crash_report, desktop_actions, error_surface, first_run,
-    i18n, logging, notifications, secure_storage, session, storage, tasks, telemetry, undo_stack,
-    updater,
+    accessibility, audio, auth, auth_ui, commands, connectivity, crash_report, desktop_actions,
+    error_surface, first_run, i18n, logging, microphone, notifications, secure_storage, session,
+    storage, system_controls, tasks, telemetry, undo_stack, updater,
 };
 pub use shell::route as routes;
-pub use shell::{menus, root, sidebar, status_bar, title_bar};
+pub use shell::{menus, page, root, status_bar, title_bar};
 pub use state::config_store as app_state;
-pub use state::migrations as config_migrations;

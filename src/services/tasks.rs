@@ -8,6 +8,9 @@ use crate::platform::clock::Instant;
 
 use crate::{ids::TaskId, time::AppTimestamp};
 
+/// Cap on retained task records; the newest are kept.
+const MAX_TASKS: usize = 200;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskStatus {
     Queued,
@@ -78,7 +81,7 @@ pub fn start_demo_task(cx: &mut App) {
     );
     start(
         id,
-        "Demo background task".to_string(),
+        crate::i18n::localize("tasks_demo_label"),
         TaskProgress::Percent(0),
         cx,
     );
@@ -94,7 +97,7 @@ pub fn start_demo_task_in_window(window: &mut Window, cx: &mut App) {
     );
     start(
         id,
-        "Demo background task".to_string(),
+        crate::i18n::localize("tasks_demo_label"),
         TaskProgress::Percent(0),
         cx,
     );
@@ -111,7 +114,8 @@ fn start(id: TaskId, label: String, progress: TaskProgress, cx: &mut App) {
         active_tasks_before = active_count(cx),
         "background task starting"
     );
-    cx.default_global::<TaskRegistry>().tasks.insert(
+    let registry = cx.default_global::<TaskRegistry>();
+    registry.tasks.insert(
         0,
         BackgroundTask {
             id,
@@ -123,6 +127,7 @@ fn start(id: TaskId, label: String, progress: TaskProgress, cx: &mut App) {
             error: None,
         },
     );
+    registry.tasks.truncate(MAX_TASKS);
     tracing::debug!(
         target: "gpui_starter::tasks",
         task_id = %id,
@@ -306,15 +311,18 @@ enum DemoTaskNotificationKind {
 /// stacks; kit-standard constructors keep the visual language in the kit.
 fn build_demo_task_notification(id: TaskId, kind: DemoTaskNotificationKind) -> Notification {
     match kind {
-        DemoTaskNotificationKind::Loading => Notification::info("Running demo task...")
-            .title("Demo task started")
-            .autohide(false),
+        DemoTaskNotificationKind::Loading => {
+            Notification::info(crate::i18n::localize("tasks_demo_running_body"))
+                .title(crate::i18n::localize("tasks_demo_started_title"))
+                .autohide(false)
+        }
         DemoTaskNotificationKind::Success => {
-            Notification::success("Demo task finished successfully.").title("Demo task completed")
+            Notification::success(crate::i18n::localize("tasks_demo_succeeded_body"))
+                .title(crate::i18n::localize("tasks_demo_completed_title"))
         }
         DemoTaskNotificationKind::Cancelled => {
-            Notification::warning("Demo task was cancelled during shutdown.")
-                .title("Demo task cancelled")
+            Notification::warning(crate::i18n::localize("tasks_demo_cancelled_body"))
+                .title(crate::i18n::localize("tasks_demo_cancelled_title"))
                 .autohide(false)
         }
     }

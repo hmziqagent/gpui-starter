@@ -13,9 +13,9 @@ use gpui_kit::{prelude::*, *};
 
 use crate::accessibility::A11yExt;
 use crate::app::ToggleSearch;
+use crate::features::pages::{ReloadCurrentPage, RenderErrorPage, TriggerRenderError};
+use crate::page::Page;
 use crate::routes::AppRoute;
-use crate::sidebar::Page;
-use crate::views::{ReloadCurrentPage, RenderErrorPage, TriggerRenderError};
 
 use super::super::actions::{NavigateToPage, RefreshPage, ToggleSidebar, is_rtl_locale};
 use super::super::frame_time;
@@ -31,11 +31,12 @@ impl Render for AppRoot {
 
         // clock (not std::time): Instant::now panics at runtime on wasm.
         let render_started = crate::platform::clock::Instant::now();
-        let page_title = if self.render_error {
-            "Render Error"
+        let page_title: SharedString = if self.render_error {
+            crate::i18n::localize("render_error_title")
         } else {
-            self.active_route.title()
-        };
+            self.active_route.localized_title()
+        }
+        .into();
         let active_page = self.active_route.page_for_render();
         let rtl = is_rtl_locale(&crate::app::current_locale(cx));
         let side = if rtl { Side::Right } else { Side::Left };
@@ -73,45 +74,45 @@ impl Render for AppRoot {
                     .collapsed(self.collapsed)
                     // Icon-only control; the label tracks the panel icon swap.
                     .accessibility_label(if self.collapsed {
-                        "Expand sidebar"
+                        crate::i18n::localize("sidebar_expand")
                     } else {
-                        "Collapse sidebar"
+                        crate::i18n::localize("sidebar_collapse")
                     })
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_sidebar(cx))),
             );
 
-        let sidebar =
-            Sidebar::new("app-sidebar")
-                .w(relative(1.))
-                .border_0()
-                .collapsed(self.collapsed)
-                .side(side)
-                .header(
-                    v_flex()
-                        .w_full()
-                        .gap_4()
-                        .child(SidebarHeader::new().w_full().child(sidebar_header)),
-                )
-                .child(SidebarGroup::new("Navigation").children(
+        let sidebar = Sidebar::new("app-sidebar")
+            .w(relative(1.))
+            .border_0()
+            .collapsed(self.collapsed)
+            .side(side)
+            .header(
+                v_flex()
+                    .w_full()
+                    .gap_4()
+                    .child(SidebarHeader::new().w_full().child(sidebar_header)),
+            )
+            .child(
+                SidebarGroup::new(crate::i18n::localize("sidebar_navigation")).children(
                     Page::all().iter().enumerate().map(|(ix, page)| {
                         let page = *page;
                         let context_menu: Rc<
                             dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu,
                         > = Rc::new(move |menu, _window, _cx| {
                             menu.menu_with_icon(
-                                "Navigate",
+                                crate::i18n::localize("menu_navigate"),
                                 Icon::new(IconName::ArrowRight),
                                 Box::new(NavigateToPage(page as usize)),
                             )
                             .separator()
                             .menu_with_icon(
-                                "Refresh",
+                                crate::i18n::localize("menu_refresh"),
                                 Icon::new(IconName::Redo2),
                                 Box::new(RefreshPage),
                             )
                             .separator()
                             .menu_with_icon(
-                                "Settings",
+                                crate::i18n::localize("menu_settings"),
                                 Icon::new(IconName::Settings2),
                                 Box::new(NavigateToPage(Page::Settings as usize)),
                             )
@@ -124,13 +125,16 @@ impl Render for AppRoot {
                             // bridges report the stored value +1.
                             position: ix,
                             total: Page::all().len(),
-                            on_click: Rc::new(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.set_route(AppRoute::page(page), cx);
-                            })),
+                            on_click: Rc::new(cx.listener(
+                                move |this, _: &ClickEvent, window, cx| {
+                                    this.set_route(AppRoute::page(page), window, cx);
+                                },
+                            )),
                             context_menu,
                         }
                     }),
-                ));
+                ),
+            );
 
         let content_v = v_flex()
             .id("main")
@@ -147,14 +151,14 @@ impl Render for AppRoot {
                     .child(
                         div()
                             .id("page-title")
-                            .a11y(Role::Heading, page_title)
+                            .a11y(Role::Heading, page_title.clone())
                             .aria_level(1)
-                            // Navigation moves no keyboard focus, so the
-                            // new page title is announced via this live region.
+                            // Navigation focus lands on the content area, which
+                            // announces nothing; the live region speaks the title.
                             .a11y_live(accesskit::Live::Polite)
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
-                            .child(page_title),
+                            .child(page_title.clone()),
                     ),
             )
             .child(
@@ -169,17 +173,17 @@ impl Render for AppRoot {
                     }),
             );
 
-        // Expanded: the sidebar fills a resizable panel (the wrapper must
-        // resolve the sidebar's relative width against a definite size).
-        // Collapsed: a fixed 48px icon rail outside the resizable group —
-        // the group only takes ResizablePanel children, and the panel's
-        // keyed size state must not pin the rail open at the panel width.
-        // In RTL locales the sidebar appears on the right; swap panel order.
+        // Expanded: the resizable panel gives the sidebar's relative width
+        // a definite size. Collapsed: a fixed 48px rail sibling, because a
+        // ResizablePanel child's keyed size would pin it at the panel width.
         let layout: AnyElement = if self.collapsed {
             let rail = div().id("sidebar-rail").h_full().flex_shrink_0().child(
                 div()
                     .id("sidebar-nav")
-                    .a11y(Role::Navigation, "Main navigation")
+                    .a11y(
+                        Role::Navigation,
+                        crate::i18n::localize("sidebar_main_navigation"),
+                    )
                     .aria_size_of_set(Page::all().len())
                     .child(sidebar),
             );
@@ -195,12 +199,18 @@ impl Render for AppRoot {
             let sidebar_panel = resizable_panel()
                 .size(px(255.))
                 .size_range(px(180.)..px(400.))
+                // The sidebar keeps the width the user dragged it to; window
+                // resizes are absorbed by the content panel.
+                .fixed()
                 .child(
                     div()
                         .id("sidebar-nav")
                         .h_full()
                         .w_full()
-                        .a11y(Role::Navigation, "Main navigation")
+                        .a11y(
+                            Role::Navigation,
+                            crate::i18n::localize("sidebar_main_navigation"),
+                        )
                         // AT-SPI derives each item's setsize from the nearest
                         // ancestor that declares one; item-level values are ignored.
                         .aria_size_of_set(Page::all().len())
@@ -219,15 +229,15 @@ impl Render for AppRoot {
         let content_area = div()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|_, _: &ToggleSearch, _, cx| {
-                crate::launcher::open_launcher(cx);
+                crate::features::command_palette::open_launcher(cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.toggle_sidebar(cx);
             }))
-            .on_action(cx.listener(|this, action: &NavigateToPage, _, cx| {
+            .on_action(cx.listener(|this, action: &NavigateToPage, window, cx| {
                 let pages = Page::all();
                 if let Some(&page) = pages.get(action.0) {
-                    this.set_route(AppRoute::page(page), cx);
+                    this.set_route(AppRoute::page(page), window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &RefreshPage, _, cx| {
@@ -275,11 +285,20 @@ impl Render for AppRoot {
             );
         }
 
-        v_flex()
-            .size_full()
-            .child(self.title_bar.clone())
-            .child(content_area)
-            .child(crate::status_bar::render(&self.active_route, cx))
+        crate::features::tutorial::target(
+            "tour-viewport",
+            v_flex()
+                .size_full()
+                .child(self.title_bar.clone())
+                .child(content_area)
+                .child(self.now_playing_bar.clone())
+                .child(crate::status_bar::render(&self.active_route, cx))
+                .child(self.floating_host.clone())
+                .child(self.floating_ui_host.clone())
+                // Last subtree: the tour overlay must paint above every other
+                // child of the root (tree order is the stacking order here).
+                .child(self.tutorial.clone()),
+        )
     }
 }
 
@@ -315,18 +334,18 @@ impl SidebarItem for NavItem {
         cx: &mut App,
     ) -> impl IntoElement {
         let id = id.into();
-        let label = self.page.title();
+        let label = self.page.localized_title();
         let item_on_click = self.on_click.clone();
         let activate = self.on_click;
         let context_menu = self.context_menu.clone();
-        let item = SidebarMenuItem::new(label)
+        let item = SidebarMenuItem::new(label.clone())
             .icon(Icon::new(self.page.icon()).small())
             .active(self.active)
             .collapsed(self.collapsed)
             .on_click(move |ev, window, cx| item_on_click(ev, window, cx))
             .context_menu(move |menu, window, cx| context_menu(menu, window, cx));
 
-        div()
+        let row = div()
             .id(id.clone())
             .a11y(Role::ListItem, label)
             .aria_selected(self.active)
@@ -335,6 +354,12 @@ impl SidebarItem for NavItem {
             .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
                 activate(&ClickEvent::default(), window, cx);
             })
-            .child(item.render(id, window, cx))
+            .child(item.render(id, window, cx));
+
+        if matches!(self.page, Page::Gallery) {
+            crate::features::tutorial::target("sidebar-gallery", row).into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 }
